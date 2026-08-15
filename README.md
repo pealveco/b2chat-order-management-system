@@ -21,11 +21,30 @@ Backend de un sistema simplificado de gestión de pedidos de e-commerce, desarro
 
 ## Cómo ejecutar el proyecto
 
-> 🚧 Sección pendiente de completar una vez finalizada la dockerización (ver backlog US-013).
+La aplicación se levanta junto con PostgreSQL y Redis usando Docker Compose. El archivo `.env` contiene valores de desarrollo local y no se versiona porque incluye credenciales.
 
 ```bash
-# (placeholder — se completa al finalizar la infraestructura Docker)
-docker-compose up
+docker compose up --build
+```
+
+Este comando crea y levanta:
+
+- `app`: aplicación Spring Boot WebFlux, expuesta en `http://localhost:8080`.
+- `postgres`: PostgreSQL 16, expuesto en `localhost:5432`, con volumen persistente `postgres_data`.
+- `redis`: Redis 7, expuesto en `localhost:6379`.
+
+`app` depende de los healthchecks de `postgres` y `redis`, por lo que no intenta arrancar hasta que ambos servicios estén disponibles.
+
+Para detener los contenedores:
+
+```bash
+docker compose down
+```
+
+Para detenerlos y borrar también el volumen de PostgreSQL local:
+
+```bash
+docker compose down -v
 ```
 
 ---
