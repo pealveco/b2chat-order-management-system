@@ -364,4 +364,4 @@ Documentar en README: en producción, este `Sinks.Many` se reemplazaría por un 
 
 ## 14. Registro de decisiones (sincronizar con Assumptions del backlog)
 
-Este documento se actualiza junto con la sección "Assumptions consolidadas" de `B2Chat_Backlog_Prueba_Tecnica.md` a medida que surjan nuevas decisiones durante la implementación.
+Este documento se actualiza junto con la sección "Assumptions consolidadas" de `BACKLOG.md` a medida que surjan nuevas decisiones durante la implementación.
