@@ -506,6 +506,10 @@ Operaciones: `HSET`/`HGETALL` para individual, `SADD`/`SMEMBERS` + pipeline de `
 
 ## 9. Mecanismo async (eventos en memoria)
 
+Pendiente para US-007: la operación crítica de negocio debe ser síncrona y transaccional
+validar usuario, validar productos, descontar stock y persistir la orden. Solo la notificación
+de recepción del pedido será asíncrona.
+
 ```java
 // OrderEventPublisherAdapter.java (infrastructure/driven-adapters/notification-adapter)
 private final Sinks.Many<Object> eventSink = Sinks.many().multicast().onBackpressureBuffer();
@@ -518,6 +522,14 @@ public void publishOrderPlaced(OrderPlacedEvent event) {
 ```
 
 Documentar en README: en producción, este `Sinks.Many` se reemplazaría por un publisher real hacia AWS SQS/SNS o EventBridge — el principio de desacople (responder rápido, notificar aparte) es el mismo.
+
+Resumen de la decisión para retomar US-007:
+
+- `OrderPlacedEvent` representa el hecho de dominio "pedido recibido/creado".
+- `Sinks.Many<OrderPlacedEvent>` funcionará como bus de eventos en memoria para la prueba técnica.
+- `OrderEventPublisher` publicará el evento después de persistir la orden.
+- `OrderEventListener` escuchará el flujo y simulará la notificación con log estructurado.
+- No se usará otro microservicio ni AWS real en esta prueba; en producción se reemplazaría por SQS/SNS/EventBridge con retries, durabilidad e idempotencia.
 
 ---
 
