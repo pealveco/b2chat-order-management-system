@@ -334,4 +334,5 @@ gradle-app.setting
 # -----
 *.hprof
 build-cache
-.env
+*.env
+!*.env.example
