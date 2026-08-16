@@ -61,7 +61,7 @@ public class Product {
     private String description;
     private Money price;      // value object, valida > 0
     private Integer stock;    // valida >= 0
-    private boolean active;   // soft delete flag
+    // active se agregará cuando se implemente soft delete/listado de catálogo
 }
 
 // Order.java
@@ -100,6 +100,8 @@ public enum OrderStatus {
 // Money.java — encapsula BigDecimal, valida > 0 en el constructor donde aplique
 ```
 
+Los value objects no tienen gateway/repository propio. Ejemplo: `Email` y `Money` viven dentro de agregados como `User` y `Product`; se persisten como columnas del agregado (`users.email`, `products.price`) mediante el repository del agregado.
+
 ### 3.3 Eventos de dominio (para el mecanismo async)
 
 ```java
@@ -124,6 +126,7 @@ public interface UserRepository {
 
 public interface ProductRepository {
     Mono<Product> save(Product product);
+    // Los siguientes métodos se agregan cuando las HUs los necesiten:
     Mono<Product> findById(UUID id);
     Flux<Product> findAllActive();
     Mono<Void> deleteById(UUID id); // soft delete: update active=false
@@ -141,8 +144,9 @@ public interface OrderRepository {
 
 // Puerto de cache
 public interface ProductCachePort {
-    Mono<Product> get(UUID productId);
     Mono<Void> put(Product product);          // write-through
+    // Los siguientes métodos se agregan cuando las HUs los necesiten:
+    Mono<Product> get(UUID productId);
     Mono<Void> evict(UUID productId);          // usado en soft delete
     Flux<Product> getAll();
     Mono<Void> putAll(List<Product> products); // repoblado read-through
@@ -164,7 +168,7 @@ public interface OrderEventPublisher {
 | `RegisterUserUseCase` | `UserRepository` | Valida email único → guarda → retorna `User` |
 | `GetUserUseCase` | `UserRepository` | Busca por ID → error de dominio si no existe |
 | `CreateProductUseCase` | `ProductRepository`, `ProductCachePort` | Guarda en Postgres → escribe en cache (write-through, secuencial, solo si Postgres confirmó) |
-| `ListProductsUseCase` | `ProductRepository`, `ProductCachePort` | Intenta cache → si vacío, lee Postgres y repuebla cache (read-through) |
+| `ListProductsUseCase` | `ProductRepository`, `ProductCachePort` | Intenta cache → si vacío o expirado, lee Postgres y repuebla cache (read-through) |
 | `UpdateProductUseCase` | `ProductRepository`, `ProductCachePort` | Actualiza Postgres → actualiza cache (write-through) |
 | `DeleteProductUseCase` | `ProductRepository`, `ProductCachePort` | Soft delete en Postgres (`active=false`) → evict de cache |
 | `PlaceOrderUseCase` | `UserRepository`, `ProductRepository`, `OrderRepository`, `OrderEventPublisher` | Valida usuario existe → valida cada producto existe → `decrementStockIfAvailable` por cada ítem (si alguno falla, abortar toda la operación — ver nota de atomicidad abajo) → guarda `Order` en `PENDING` → publica `OrderPlacedEvent` |
@@ -316,8 +320,22 @@ Respuestas mínimas profesionales cubiertas para `POST /users`:
 // Request
 { "name": "Mouse inalámbrico", "description": "...", "price": 25000, "stock": 100 }
 // Response 201
-{ "id": "uuid", "name": "...", "description": "...", "price": 25000, "stock": 100 }
+{
+  "data": {
+    "id": "uuid",
+    "name": "Mouse inalámbrico",
+    "description": "...",
+    "price": 25000,
+    "stock": 100
+  },
+  "meta": {
+    "path": "/products",
+    "timestamp": "2026-08-16T00:00:00Z"
+  }
+}
 ```
+
+US-003 usa write-through secuencial dentro de `CreateProductUseCase`: primero guarda en Postgres mediante `ProductRepository`; si la persistencia confirma, escribe el mismo producto en Redis mediante `ProductCachePort` con la clave `product:{id}`. Si falla Postgres o Redis, la API responde `503 Service Unavailable` con el envelope estándar de error.
 
 **`GET /products`** → `200`, array de productos (desde cache si está disponible).
 
@@ -361,7 +379,7 @@ Respuestas mínimas profesionales cubiertas para `POST /users`:
 { "token": "eyJhbGciOi..." }
 ```
 
-Endpoints protegidos (requieren `Authorization: Bearer {token}`): operaciones de escritura operativas (`POST`, `PUT`, `DELETE`) según alcance de cada HU. `POST /users` queda público para registro. Los `GET` quedan abiertos salvo que una HU indique lo contrario.
+Endpoints protegidos (requieren `Authorization: Bearer {token}`): operaciones de escritura operativas (`POST`, `PUT`, `DELETE`) según alcance de cada HU. `POST /users` queda público para registro. `POST /products` queda temporalmente público durante US-003 porque aún no existe HU de autenticación/roles de administrador. Los `GET` quedan abiertos salvo que una HU indique lo contrario.
 
 ---
 
@@ -496,11 +514,18 @@ WHERE id = :productId AND stock >= :quantity;
 ## 8. Estructura de claves Redis
 
 ```
-product:{productId}   -> Hash con campos {name, description, price, stock, active}
-products:all          -> Set de todos los productId activos (evita KEYS * al listar)
+product:{productId}   -> JSON serializado del producto {id, name, description, price, stock}
+products:all          -> Futuro índice de productId activos para listado read-through
 ```
 
-Operaciones: `HSET`/`HGETALL` para individual, `SADD`/`SMEMBERS` + pipeline de `HGETALL` para el listado completo.
+US-003 solo escribe `product:{id}` con `ReactiveRedisTemplate`. `GET /products` combinará read-through: consultar Redis primero; si la entrada individual o el índice de catálogo no existe, leer Postgres, responder y repoblar Redis.
+
+TTL recomendado para catálogo:
+
+- Usar TTL en productos individuales para evitar datos indefinidamente obsoletos.
+- Aplicar TTLs escalonados con jitter, por ejemplo 10-15 minutos por producto, para evitar expiración masiva simultánea.
+- Cuando exista listado/read-through, evaluar un job programado que refresque claves cercanas a expirar desde Postgres. Ese job no reemplaza la fuente de verdad; solo reduce misses y latencia.
+- En escrituras (`POST`, futuro `PUT`, futuro `DELETE`) mantener write-through/evict para que los cambios importantes actualicen o invaliden cache inmediatamente.
 
 ---
 
@@ -538,6 +563,7 @@ Resumen de la decisión para retomar US-007:
 - Librería: `io.jsonwebtoken:jjwt-api` + `jjwt-impl` + `jjwt-jackson`.
 - `SecurityWebFilterChain` (Spring Security Reactive) protegiendo operaciones de escritura según alcance de cada HU.
 - `POST /users` queda público para permitir registro de usuarios.
+- `POST /products` queda público temporalmente hasta implementar autenticación/roles de administrador.
 - Regla general futura: proteger `POST`, `PUT`, `DELETE` operativos; `GET` públicos salvo que una HU indique lo contrario.
 - Secret de firma vía variable de entorno (`JWT_SECRET`), nunca hardcoded — coherente con buenas prácticas ya aplicadas en tu experiencia (Cognito/OAuth2 en AB InBev).
 

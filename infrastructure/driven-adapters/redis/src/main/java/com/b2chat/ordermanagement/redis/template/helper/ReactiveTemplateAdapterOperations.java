@@ -5,14 +5,15 @@ import org.springframework.data.redis.connection.ReactiveRedisConnectionFactory;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.data.redis.serializer.JacksonJsonRedisSerializer;
 import org.springframework.data.redis.serializer.RedisSerializationContext;
+import org.springframework.data.redis.serializer.StringRedisSerializer;
 import reactor.core.publisher.Mono;
 
 import java.lang.reflect.ParameterizedType;
 import java.time.Duration;
 import java.util.function.Function;
 
-public abstract class ReactiveTemplateAdapterOperations<E, K, V> {
-    private final ReactiveRedisTemplate<K, V> template;
+public abstract class ReactiveTemplateAdapterOperations<E, V> {
+    private final ReactiveRedisTemplate<String, V> template;
     private final Class<V> dataClass;
     protected ObjectMapper mapper;
     private final Function<V, E> toEntityFn;
@@ -21,29 +22,31 @@ public abstract class ReactiveTemplateAdapterOperations<E, K, V> {
     protected ReactiveTemplateAdapterOperations(ReactiveRedisConnectionFactory connectionFactory, ObjectMapper mapper, Function<V, E> toEntityFn) {
         this.mapper = mapper;
         ParameterizedType genericSuperclass = (ParameterizedType) this.getClass().getGenericSuperclass();
-        this.dataClass = (Class<V>) genericSuperclass.getActualTypeArguments()[2];
+        this.dataClass = (Class<V>) genericSuperclass.getActualTypeArguments()[1];
         this.toEntityFn = toEntityFn;
 
-        RedisSerializationContext<K, V> serializationContext =
-                RedisSerializationContext.<K, V>newSerializationContext(new JacksonJsonRedisSerializer<>(dataClass))
+        var valueSerializer = new JacksonJsonRedisSerializer<>(dataClass);
+        RedisSerializationContext<String, V> serializationContext =
+                RedisSerializationContext.<String, V>newSerializationContext(new StringRedisSerializer())
+                        .value(valueSerializer)
                         .build();
 
         template = new ReactiveRedisTemplate<>(connectionFactory, serializationContext);
     }
 
-    public Mono<E> save(K key, E entity) {
+    public Mono<E> save(String key, E entity) {
         return Mono.just(entity)
                 .map(this::toValue)
                 .flatMap(value -> template.opsForValue().set(key, value))
                 .thenReturn(entity);
     }
 
-    public Mono<E> save(K key, E entity, long expirationMillis) {
+    public Mono<E> save(String key, E entity, long expirationMillis) {
         return save(key, entity)
                 .flatMap(v -> template.expire(key, Duration.ofMillis(expirationMillis)).thenReturn(v));
     }
 
-    public Mono<E> findById(K key) {
+    public Mono<E> findById(String key) {
         return template.opsForValue().get(key)
                 .map(this::toEntity);
     }

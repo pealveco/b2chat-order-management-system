@@ -11,7 +11,7 @@ Backend de un sistema simplificado de gestión de pedidos de e-commerce, desarro
 - **Lenguaje:** Java 21
 - **Framework:** Spring Boot (WebFlux — programación reactiva)
 - **Persistencia:** PostgreSQL vía R2DBC
-- **Cache:** Redis (estrategia write-through + read-through)
+- **Cache:** Redis (write-through implementado; read-through planeado para consultas de catálogo)
 - **Seguridad:** JWT
 - **Arquitectura:** Clean Architecture — [Scaffold Bancolombia](https://bancolombia.github.io/scaffold-clean-architecture/)
 - **Contenedores:** Docker / Docker Compose
@@ -75,29 +75,29 @@ Backlog completo de historias de usuario y criterios de aceptación en [`docs/BA
 ### Users
 | Método | Endpoint | Descripción |
 |---|---|---|
-| `POST` | `/users` | Registrar un nuevo usuario |
-| `GET` | `/users/{id}` | Obtener detalles de un usuario |
-| `GET` | `/users/{id}/orders` | Listar pedidos de un usuario *(bonus)* |
+| `POST` | `/users` | Registrar un nuevo usuario *(implementado)* |
+| `GET` | `/users/{id}` | Obtener detalles de un usuario *(implementado)* |
+| `GET` | `/users/{id}/orders` | Listar pedidos de un usuario *(planeado / bonus)* |
 
 ### Products
 | Método | Endpoint | Descripción |
 |---|---|---|
-| `POST` | `/products` | Registrar un nuevo producto |
-| `GET` | `/products` | Listar catálogo de productos |
-| `PUT` | `/products/{id}` | Actualizar un producto |
-| `DELETE` | `/products/{id}` | Eliminar un producto (soft delete) |
+| `POST` | `/products` | Registrar un nuevo producto *(implementado)* |
+| `GET` | `/products` | Listar catálogo de productos *(planeado)* |
+| `PUT` | `/products/{id}` | Actualizar un producto *(planeado)* |
+| `DELETE` | `/products/{id}` | Eliminar un producto (soft delete) *(planeado)* |
 
 ### Orders
 | Método | Endpoint | Descripción |
 |---|---|---|
-| `POST` | `/orders` | Crear un pedido (procesamiento asíncrono + notificación) |
-| `GET` | `/orders/{id}` | Obtener detalle de un pedido |
-| `PUT` | `/orders/{id}/status` | Actualizar estado de un pedido |
+| `POST` | `/orders` | Crear un pedido (procesamiento asíncrono + notificación) *(planeado)* |
+| `GET` | `/orders/{id}` | Obtener detalle de un pedido *(planeado)* |
+| `PUT` | `/orders/{id}/status` | Actualizar estado de un pedido *(planeado)* |
 
 ### Auth *(bonus)*
 | Método | Endpoint | Descripción |
 |---|---|---|
-| `POST` | `/auth/token` | Emitir token JWT |
+| `POST` | `/auth/token` | Emitir token JWT *(planeado / bonus)* |
 
 > Ejemplos completos de request/response en [`SPEC.md`](./SPEC.md#6-contratos-de-api).
 
@@ -121,9 +121,11 @@ WHERE id = :productId AND stock >= :quantity;
 Si el número de filas afectadas es 0, se interpreta como stock insuficiente y la operación se aborta.
 
 ### Estrategia de caché
-Se implementa **write-through** (toda escritura de producto actualiza Postgres y Redis en la misma operación, garantizando consistencia inmediata) combinado con **read-through fallback** (si ocurre un miss real — cache frío en el arranque, o evicción — se lee de Postgres y se repuebla Redis).
+Actualmente se implementa **write-through** para productos: toda creación de producto persiste primero en Postgres y, si la persistencia confirma, escribe el producto en Redis con la clave `product:{id}` dentro del mismo caso de uso.
 
-Para un entorno de mayor tráfico, el diseño completo evolucionaría a incluir TTL con jitter (para evitar expiración simultánea de claves y *thundering herd*) y un job de *refresh-ahead* que renueve proactivamente las claves antes de vencer. Esto no se implementó en el alcance de esta prueba por tiempo, pero se documenta como la evolución natural del diseño — ver [Assumptions](#assumptions).
+La consulta de catálogo se implementará con **read-through fallback** cuando exista `GET /products`: ante un miss real — cache frío en el arranque, TTL expirado o evicción — se leerá desde Postgres, se responderá al cliente y se repoblará Redis.
+
+Para un entorno de mayor tráfico, el diseño completo evolucionaría a incluir TTL con jitter (para evitar expiración simultánea de claves y *thundering herd*) y un job de *refresh-ahead* que renueve proactivamente las claves antes de vencer. Esto queda documentado como evolución natural del diseño — ver [Assumptions](#assumptions).
 
 ### Desarrollo asistido por IA (Spec-Driven Development)
 Este proyecto se desarrolló usando **Claude Code** bajo un enfoque de Spec-Driven Development (SDD): definición de backlog (historias de usuario + criterios de aceptación) → especificación técnica (`SPEC.md`, contratos de API, modelo de datos, decisiones de arquitectura) → implementación guiada por esa especificación → validación de estructura con `./gradlew vs` del scaffold Bancolombia. Este proceso se mantuvo documentado y versionado a lo largo del desarrollo, no aplicado de forma ad-hoc.
@@ -134,7 +136,7 @@ Este proyecto se desarrolló usando **Claude Code** bajo un enfoque de Spec-Driv
 
 Decisiones de alcance no especificadas explícitamente en el enunciado de la prueba técnica:
 
-1. **Caching:** estrategia write-through + read-through fallback (no cache-aside), para evitar servir datos desactualizados. TTL con jitter y job de refresh-ahead quedan documentados como evolución productiva no implementada por alcance/tiempo.
+1. **Caching:** write-through implementado para escrituras de producto. Read-through fallback se agregará con las consultas de catálogo. TTL con jitter y job de refresh-ahead quedan documentados como evolución productiva.
 2. **Notificaciones:** simuladas en memoria con un patrón productor/consumidor reactivo, representando el mismo principio de desacople que se usaría en producción con AWS SQS/SNS o EventBridge.
 3. **Eliminación de productos:** soft delete (`active=false`) en lugar de DELETE físico, para preservar integridad referencial con pedidos históricos.
 4. **Cancelación de pedidos:** al cancelar un pedido, se repone automáticamente el stock descontado.

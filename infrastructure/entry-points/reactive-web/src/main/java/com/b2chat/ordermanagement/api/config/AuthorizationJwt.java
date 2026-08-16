@@ -61,6 +61,7 @@ public class AuthorizationJwt implements WebFluxConfigurer {
                     .pathMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                     .pathMatchers(HttpMethod.GET, "/**").permitAll()
                     .pathMatchers(HttpMethod.POST, "/users").permitAll()
+                    .pathMatchers(HttpMethod.POST, "/products").permitAll()
                     .anyExchange().authenticated())
             .oauth2ResourceServer(oauth2 ->
                     oauth2.jwt(jwtSpec ->
