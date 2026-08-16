@@ -410,8 +410,6 @@ Para mantener consistencia profesional en los adapters de persistencia, usar est
    .all();
    ```
 
-JPQL no se usa en este proyecto mientras la persistencia siga basada en Spring Data R2DBC; JPQL pertenece al ecosistema JPA/Hibernate bloqueante.
-
 ```sql
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
