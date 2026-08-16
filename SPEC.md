@@ -18,7 +18,7 @@ b2chat-order-management-system/
 ├── domain/model/                      → Entidades de dominio puras, sin frameworks
 ├── domain/usecase/                    → Lógica de negocio, orquesta puertos del dominio
 ├── infrastructure/driven-adapters/    → Implementaciones de puertos salientes (DB, cache, notificaciones)
-├── infrastructure/entry-points/       → Implementaciones de puertos entrantes (REST controllers)
+├── infrastructure/entry-points/       → Implementaciones de puertos entrantes (REST funcional WebFlux)
 └── infrastructure/helpers/            → Utilidades transversales (si aplica)
 ```
 
@@ -35,7 +35,7 @@ Usar las tareas del scaffold (`Generate Driven Adapter` / `Generate Entry Point`
 | `infrastructure/driven-adapters/r2dbc-postgresql` | Driven adapter | Persistencia de `users`, `products`, `orders`, `order_items` |
 | `infrastructure/driven-adapters/redis` | Driven adapter | Cache write-through + read-through del catálogo de productos |
 | `infrastructure/driven-adapters/notification-adapter` | Driven adapter (custom, no viene por defecto en el scaffold — crear manualmente siguiendo la misma convención de carpeta) | Listener de eventos `OrderPlacedEvent` / `OrderCompletedEvent`, simula envío de notificación (log estructurado) |
-| `infrastructure/entry-points/reactive-web` | Entry point | Controllers REST + filtro de seguridad JWT |
+| `infrastructure/entry-points/reactive-web` | Entry point | Handlers/Routers funcionales WebFlux + filtro de seguridad JWT |
 
 **Nota:** confirmar contra `gradle generateDrivenAdapter` (listado de tipos disponibles) que `r2dbc` y `redis` estén soportados como tipos nativos del scaffold antes de generarlos — si el nombre exacto de la tarea difiere, ajustar aquí y no asumir.
 
@@ -178,6 +178,54 @@ public interface OrderEventPublisher {
 
 ## 6. Contratos de API (`infrastructure/entry-points/reactive-web`)
 
+### 6.0 Convenciones HTTP
+
+El entry point REST usa WebFlux funcional siguiendo el estilo del scaffold Bancolombia, con una dupla por recurso:
+
+```text
+UserHandler + UserRouterRest
+ProductHandler + ProductRouterRest
+OrderHandler + OrderRouterRest
+```
+
+Los `Handler` / `RouterRest` de ejemplo generados por el scaffold no se exponen en producción; solo se conservan rutas reales por entidad.
+
+Las respuestas exitosas usan envoltura estándar:
+
+```json
+{
+  "data": {},
+  "meta": {
+    "path": "/resource",
+    "timestamp": "2026-08-16T00:00:00Z"
+  }
+}
+```
+
+Las respuestas de error usan envoltura estándar:
+
+```json
+{
+  "error": {
+    "code": "ERROR_CODE",
+    "message": "Human readable message",
+    "status": 400,
+    "path": "/resource",
+    "timestamp": "2026-08-16T00:00:00Z",
+    "details": []
+  }
+}
+```
+
+Validación:
+
+- DTO/request valida contrato HTTP con Jakarta Bean Validation (`@NotBlank`, `@Email`, etc.) mediante un `RequestValidator` reusable.
+- Dominio valida invariantes internas con value objects y excepciones de dominio. Ejemplo: `Email` nunca puede existir inválido aunque el dato no venga desde HTTP.
+- `DomainException` se mantiene como base común para errores de negocio con `code`.
+- Excepciones propias del entry point viven bajo `api.exception`.
+- Respuestas exitosas viven bajo `api.response`.
+- Errores serializables y handler global viven bajo `api.error`.
+
 ### 6.1 Users
 
 **`POST /users`**
@@ -185,10 +233,41 @@ public interface OrderEventPublisher {
 // Request
 { "email": "juan@example.com", "name": "Juan Perez", "address": "Cra 10 #20-30, Bogotá" }
 // Response 201
-{ "id": "uuid", "email": "juan@example.com", "name": "Juan Perez", "address": "Cra 10 #20-30, Bogotá" }
+{
+  "data": {
+    "id": "uuid",
+    "email": "juan@example.com",
+    "name": "Juan Perez",
+    "address": "Cra 10 #20-30, Bogotá"
+  },
+  "meta": {
+    "path": "/users",
+    "timestamp": "2026-08-16T00:00:00Z"
+  }
+}
 // Response 409 (email duplicado)
-{ "error": "EMAIL_ALREADY_EXISTS", "message": "..." }
+{
+  "error": {
+    "code": "EMAIL_ALREADY_EXISTS",
+    "message": "A user with email juan@example.com already exists",
+    "status": 409,
+    "path": "/users",
+    "timestamp": "2026-08-16T00:00:00Z",
+    "details": []
+  }
+}
 ```
+
+Respuestas mínimas profesionales cubiertas para `POST /users`:
+
+| Status | Caso |
+|---|---|
+| `201 Created` | Usuario registrado |
+| `400 Bad Request` | Body inválido, body vacío, validación de DTO o invariant de dominio inválida |
+| `409 Conflict` | Email duplicado |
+| `415 Unsupported Media Type` | `Content-Type` diferente de `application/json` |
+| `503 Service Unavailable` | Repositorio/persistencia temporalmente no disponible |
+| `500 Internal Server Error` | Fallback no controlado |
 
 **`GET /users/{id}`** → `200` con el usuario, `404` si no existe.
 
@@ -244,11 +323,94 @@ public interface OrderEventPublisher {
 { "token": "eyJhbGciOi..." }
 ```
 
-Endpoints protegidos (requieren `Authorization: Bearer {token}`): todos los `POST`, `PUT`, `DELETE`. Los `GET` quedan abiertos (no especificado en el enunciado como requisito, decisión de alcance — documentar en assumptions).
+Endpoints protegidos (requieren `Authorization: Bearer {token}`): operaciones de escritura operativas (`POST`, `PUT`, `DELETE`) según alcance de cada HU. `POST /users` queda público para registro. Los `GET` quedan abiertos salvo que una HU indique lo contrario.
 
 ---
 
 ## 7. Modelo de datos (PostgreSQL — DDL de referencia)
+
+Durante esta fase, el schema local y los datos mínimos esenciales para probar HUs se centralizan en:
+
+```text
+infrastructure/driven-adapters/r2dbc-postgresql/src/main/resources/r2dbc-schema.sql
+```
+
+Ese archivo se carga al arrancar la aplicación mediante `R2dbcSchemaInitializerConfig`, usando `ConnectionFactoryInitializer` y `ResourceDatabasePopulator`.
+
+Convención del archivo:
+
+```sql
+-- Schema
+-- TODO: Move schema evolution and seed data to Flyway or Liquibase when migrations are introduced.
+
+-- DDL idempotente
+
+-- Seed data
+
+-- INSERT idempotentes con ON CONFLICT (...) DO NOTHING
+```
+
+Cuando el proyecto requiera migraciones formales, mover:
+
+- evolución de esquema a Flyway o Liquibase
+- seeds de desarrollo a scripts/versiones separadas según ambiente
+- fixtures de pruebas a tests o contenedores de integración
+
+### 7.1 Jerarquía para consultas R2DBC
+
+Para mantener consistencia profesional en los adapters de persistencia, usar esta jerarquía:
+
+1. **Query methods derivados**
+
+   Primera opción para consultas simples, cortas y evidentes. El nombre del método debe seguir siendo legible.
+
+   ```java
+   Mono<Boolean> existsByEmail(String email);
+   Flux<OrderData> findByUserId(UUID userId);
+   Flux<ProductData> findAllByActiveTrue();
+   ```
+
+2. **`@Query`**
+
+   Usar cuando el query method derivado se vuelve largo, cuando el SQL fijo es más claro, o cuando se necesita una operación específica como un update atómico.
+
+   ```java
+   @Query("""
+       SELECT *
+       FROM orders
+       WHERE user_id = :userId
+         AND status = :status
+   """)
+   Flux<OrderData> findUserOrdersByStatus(UUID userId, String status);
+   ```
+
+   ```java
+   @Query("""
+       UPDATE products
+       SET stock = stock - :quantity
+       WHERE id = :productId
+         AND stock >= :quantity
+   """)
+   Mono<Integer> decrementStockIfAvailable(UUID productId, int quantity);
+   ```
+
+3. **`DatabaseClient` / `R2dbcEntityTemplate`**
+
+   Usar para consultas dinámicas, filtros opcionales, joins con mapeo manual, flujos multi-step o casos donde se requiere control fino del SQL y del mapping.
+
+   ```java
+   databaseClient.sql("""
+       SELECT *
+       FROM products
+       WHERE active = true
+         AND (:name IS NULL OR name ILIKE :name)
+   """)
+   .bind("name", nameFilter)
+   .map((row, metadata) -> toProductData(row))
+   .all();
+   ```
+
+JPQL no se usa en este proyecto mientras la persistencia siga basada en Spring Data R2DBC; JPQL pertenece al ecosistema JPA/Hibernate bloqueante.
 
 ```sql
 CREATE TABLE users (
@@ -326,7 +488,9 @@ Documentar en README: en producción, este `Sinks.Many` se reemplazaría por un 
 ## 10. Seguridad (JWT)
 
 - Librería: `io.jsonwebtoken:jjwt-api` + `jjwt-impl` + `jjwt-jackson`.
-- `SecurityWebFilterChain` (Spring Security Reactive) protegiendo `POST`, `PUT`, `DELETE`; `GET` públicos.
+- `SecurityWebFilterChain` (Spring Security Reactive) protegiendo operaciones de escritura según alcance de cada HU.
+- `POST /users` queda público para permitir registro de usuarios.
+- Regla general futura: proteger `POST`, `PUT`, `DELETE` operativos; `GET` públicos salvo que una HU indique lo contrario.
 - Secret de firma vía variable de entorno (`JWT_SECRET`), nunca hardcoded — coherente con buenas prácticas ya aplicadas en tu experiencia (Cognito/OAuth2 en AB InBev).
 
 ---
@@ -336,6 +500,8 @@ Documentar en README: en producción, este `Sinks.Many` se reemplazaría por un 
 | Tipo | Alcance | Herramientas |
 |---|---|---|
 | Unitario | Todos los use cases de `domain/usecase`, con puertos mockeados | JUnit 5, Mockito, `StepVerifier` (Reactor Test) |
+| Entry point | Contratos HTTP, status codes, response envelope, error envelope y validaciones de request | `WebTestClient` |
+| Adapter | Mapeo de entidades, errores de persistencia y constraints | JUnit 5, Mockito, `StepVerifier` |
 | Integración | `POST /users` (incl. email duplicado), `POST /orders` (incl. stock insuficiente → 409), `PUT /orders/{id}/status` | `@SpringBootTest`, `WebTestClient`, Testcontainers (Postgres + Redis reales) |
 
 ---
@@ -351,7 +517,7 @@ Documentar en README: en producción, este `Sinks.Many` se reemplazaría por un 
 1. `domain/model` — entidades, value objects, `OrderStatus` con transiciones
 2. `domain/usecase` — puertos (interfaces) + casos de uso de Usuarios y Productos primero (más simples, validan que el scaffold responde)
 3. `infrastructure/driven-adapters/r2dbc-postgresql` — implementación de repos + DDL
-4. `infrastructure/entry-points/reactive-web` — controllers de Usuarios y Productos
+4. `infrastructure/entry-points/reactive-web` — handlers/routers funcionales de Usuarios y Productos
 5. `infrastructure/driven-adapters/redis` — cache write-through/read-through
 6. `domain/usecase` — `PlaceOrderUseCase` + `UpdateOrderStatusUseCase` (la pieza más compleja: concurrencia + async)
 7. `infrastructure/driven-adapters/notification-adapter` — mecanismo de eventos

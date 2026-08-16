@@ -4,6 +4,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.convert.converter.Converter;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AbstractAuthenticationToken;
 import org.springframework.security.config.annotation.method.configuration.EnableReactiveMethodSecurity;
 import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity;
@@ -23,7 +24,6 @@ import reactor.core.publisher.Mono;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -56,7 +56,10 @@ public class AuthorizationJwt implements WebFluxConfigurer {
     @Bean
     public SecurityWebFilterChain filterChain(ServerHttpSecurity http) {
         http
-            .authorizeExchange(authorize -> authorize.anyExchange().authenticated())
+            .csrf(ServerHttpSecurity.CsrfSpec::disable)
+            .authorizeExchange(authorize -> authorize
+                    .pathMatchers(HttpMethod.POST, "/users").permitAll()
+                    .anyExchange().authenticated())
             .oauth2ResourceServer(oauth2 ->
                     oauth2.jwt(jwtSpec ->
                             jwtSpec
