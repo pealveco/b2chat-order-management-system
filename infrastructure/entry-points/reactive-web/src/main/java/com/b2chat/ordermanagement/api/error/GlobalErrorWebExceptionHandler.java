@@ -3,6 +3,7 @@ package com.b2chat.ordermanagement.api.error;
 import com.b2chat.ordermanagement.model.common.DomainException;
 import com.b2chat.ordermanagement.model.common.RepositoryUnavailableException;
 import com.b2chat.ordermanagement.model.user.EmailAlreadyExistsException;
+import com.b2chat.ordermanagement.model.user.UserNotFoundException;
 import com.b2chat.ordermanagement.api.exception.ApiStatusException;
 import com.b2chat.ordermanagement.api.exception.InvalidRequestException;
 import lombok.RequiredArgsConstructor;
@@ -57,6 +58,9 @@ public class GlobalErrorWebExceptionHandler implements WebExceptionHandler {
     private HttpStatus resolveStatus(Throwable throwable) {
         if (throwable instanceof EmailAlreadyExistsException) {
             return HttpStatus.CONFLICT;
+        }
+        if (throwable instanceof UserNotFoundException) {
+            return HttpStatus.NOT_FOUND;
         }
         if (throwable instanceof RepositoryUnavailableException) {
             return HttpStatus.SERVICE_UNAVAILABLE;

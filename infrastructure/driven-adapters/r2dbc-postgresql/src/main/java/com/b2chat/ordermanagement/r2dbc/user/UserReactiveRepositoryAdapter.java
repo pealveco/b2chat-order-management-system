@@ -55,4 +55,11 @@ public class UserReactiveRepositoryAdapter extends ReactiveAdapterOperations<
                 .onErrorMap(DataAccessException.class,
                         error -> new RepositoryUnavailableException("Persistence repository is temporarily unavailable"));
     }
+
+    @Override
+    public Mono<User> findById(UUID id) {
+        return super.findById(id)
+                .onErrorMap(DataAccessException.class,
+                        error -> new RepositoryUnavailableException("Persistence repository is temporarily unavailable"));
+    }
 }

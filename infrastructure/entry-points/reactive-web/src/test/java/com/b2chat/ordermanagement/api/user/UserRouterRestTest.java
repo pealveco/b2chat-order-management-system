@@ -3,8 +3,10 @@ package com.b2chat.ordermanagement.api.user;
 import com.b2chat.ordermanagement.api.error.GlobalErrorWebExceptionHandler;
 import com.b2chat.ordermanagement.api.validation.RequestValidator;
 import com.b2chat.ordermanagement.model.common.RepositoryUnavailableException;
+import com.b2chat.ordermanagement.model.email.Email;
 import com.b2chat.ordermanagement.model.user.User;
 import com.b2chat.ordermanagement.model.user.gateways.UserRepository;
+import com.b2chat.ordermanagement.usecase.getuser.GetUserUseCase;
 import com.b2chat.ordermanagement.usecase.registeruser.RegisterUserUseCase;
 import jakarta.validation.Validation;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,9 +32,10 @@ class UserRouterRestTest {
     @BeforeEach
     void setUp() {
         userRepository = Mockito.mock(UserRepository.class);
-        var useCase = new RegisterUserUseCase(userRepository);
+        var registerUserUseCase = new RegisterUserUseCase(userRepository);
+        var getUserUseCase = new GetUserUseCase(userRepository);
         var validator = Validation.buildDefaultValidatorFactory().getValidator();
-        var handler = new UserHandler(useCase, new RequestValidator(validator));
+        var handler = new UserHandler(registerUserUseCase, getUserUseCase, new RequestValidator(validator));
         var router = new UserRouterRest().userRoutes(handler);
         var handlerStrategies = HandlerStrategies.builder()
                 .exceptionHandler(new GlobalErrorWebExceptionHandler(new ObjectMapper()))
@@ -188,5 +191,57 @@ class UserRouterRestTest {
                 .jsonPath("$.error.code").isEqualTo("SERVICE_UNAVAILABLE")
                 .jsonPath("$.error.message").isEqualTo("Persistence repository is temporarily unavailable")
                 .jsonPath("$.error.status").isEqualTo(503);
+    }
+
+    @Test
+    void shouldGetUserById() {
+        var id = new UUID(1L, 1L);
+        when(userRepository.findById(id)).thenReturn(Mono.just(new User(
+                id,
+                new Email("ana@example.com"),
+                "Ana Demo",
+                "Calle 123"
+        )));
+
+        webTestClient.get()
+                .uri("/users/{id}", id)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.data.id").isEqualTo(id.toString())
+                .jsonPath("$.data.email").isEqualTo("ana@example.com")
+                .jsonPath("$.data.name").isEqualTo("Ana Demo")
+                .jsonPath("$.data.address").isEqualTo("Calle 123")
+                .jsonPath("$.meta.path").isEqualTo("/users/" + id)
+                .jsonPath("$.meta.timestamp").exists();
+    }
+
+    @Test
+    void shouldReturnNotFoundWhenUserDoesNotExist() {
+        var id = new UUID(1L, 1L);
+        when(userRepository.findById(id)).thenReturn(Mono.empty());
+
+        webTestClient.get()
+                .uri("/users/{id}", id)
+                .exchange()
+                .expectStatus().isNotFound()
+                .expectBody()
+                .jsonPath("$.error.code").isEqualTo("USER_NOT_FOUND")
+                .jsonPath("$.error.message").isEqualTo("User with id " + id + " was not found")
+                .jsonPath("$.error.status").isEqualTo(404)
+                .jsonPath("$.error.path").isEqualTo("/users/" + id);
+    }
+
+    @Test
+    void shouldReturnBadRequestWhenUserIdIsNotUuid() {
+        webTestClient.get()
+                .uri("/users/not-a-uuid")
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.error.code").isEqualTo("INVALID_REQUEST")
+                .jsonPath("$.error.message").isEqualTo("Path variable id must be a valid UUID")
+                .jsonPath("$.error.status").isEqualTo(400)
+                .jsonPath("$.error.path").isEqualTo("/users/not-a-uuid");
     }
 }

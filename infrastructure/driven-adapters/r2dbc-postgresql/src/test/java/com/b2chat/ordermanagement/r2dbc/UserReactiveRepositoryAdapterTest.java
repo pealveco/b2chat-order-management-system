@@ -55,6 +55,17 @@ class UserReactiveRepositoryAdapterTest {
     }
 
     @Test
+    void shouldMapPersistenceFailuresWhenFindingUserById() {
+        var id = UUID.randomUUID();
+        when(repository.findById(id))
+                .thenReturn(Mono.error(new DataAccessResourceFailureException("connection failed")));
+
+        StepVerifier.create(repositoryAdapter.findById(id))
+                .expectError(RepositoryUnavailableException.class)
+                .verify();
+    }
+
+    @Test
     void shouldSaveUser() {
         var id = UUID.randomUUID();
         var user = User.create(new Email("juan@example.com"), "Juan Perez", "Cra 10");

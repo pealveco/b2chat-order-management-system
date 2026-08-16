@@ -269,7 +269,45 @@ Respuestas mínimas profesionales cubiertas para `POST /users`:
 | `503 Service Unavailable` | Repositorio/persistencia temporalmente no disponible |
 | `500 Internal Server Error` | Fallback no controlado |
 
-**`GET /users/{id}`** → `200` con el usuario, `404` si no existe.
+**`GET /users/{id}`**
+
+```json
+// Response 200
+{
+  "data": {
+    "id": "uuid",
+    "email": "juan@example.com",
+    "name": "Juan Perez",
+    "address": "Cra 10 #20-30, Bogotá"
+  },
+  "meta": {
+    "path": "/users/{id}",
+    "timestamp": "2026-08-16T00:00:00Z"
+  }
+}
+// Response 404
+{
+  "error": {
+    "code": "USER_NOT_FOUND",
+    "message": "User with id {id} was not found",
+    "status": 404,
+    "path": "/users/{id}",
+    "timestamp": "2026-08-16T00:00:00Z",
+    "details": []
+  }
+}
+// Response 400
+{
+  "error": {
+    "code": "INVALID_REQUEST",
+    "message": "Path variable id must be a valid UUID",
+    "status": 400,
+    "path": "/users/not-a-uuid",
+    "timestamp": "2026-08-16T00:00:00Z",
+    "details": []
+  }
+}
+```
 
 ### 6.2 Products
 
