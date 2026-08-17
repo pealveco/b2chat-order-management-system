@@ -8,4 +8,5 @@ import java.util.UUID;
 public interface OrderRepository {
     Mono<Order> save(Order order);
     Mono<Order> findById(UUID id);
+    Mono<Order> updateStatus(Order order);
 }

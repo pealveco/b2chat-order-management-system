@@ -43,6 +43,14 @@ public class OrderReactiveRepositoryAdapter implements OrderRepository {
                         error -> new RepositoryUnavailableException("Order repository is temporarily unavailable", error));
     }
 
+    @Override
+    public Mono<Order> updateStatus(Order order) {
+        return orderRepository.updateStatus(order.getId(), order.getStatus().name())
+                .thenReturn(order)
+                .onErrorMap(DataAccessException.class,
+                        error -> new RepositoryUnavailableException("Order repository is temporarily unavailable", error));
+    }
+
     private Mono<List<OrderItem>> saveItems(UUID orderId, List<OrderItem> items) {
         return Flux.fromIterable(items)
                 .map(item -> toOrderItemData(orderId, item))

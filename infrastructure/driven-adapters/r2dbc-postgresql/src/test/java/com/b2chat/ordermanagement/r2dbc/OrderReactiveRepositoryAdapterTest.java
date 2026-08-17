@@ -3,6 +3,7 @@ package com.b2chat.ordermanagement.r2dbc;
 import com.b2chat.ordermanagement.model.common.RepositoryUnavailableException;
 import com.b2chat.ordermanagement.model.money.Money;
 import com.b2chat.ordermanagement.model.order.Order;
+import com.b2chat.ordermanagement.model.order.OrderStatus;
 import com.b2chat.ordermanagement.model.orderitem.OrderItem;
 import com.b2chat.ordermanagement.r2dbc.order.OrderData;
 import com.b2chat.ordermanagement.r2dbc.order.OrderItemData;
@@ -118,6 +119,31 @@ class OrderReactiveRepositoryAdapterTest {
                 .thenReturn(Mono.error(new DataAccessResourceFailureException("connection failed")));
 
         StepVerifier.create(adapter.findById(orderId))
+                .expectError(RepositoryUnavailableException.class)
+                .verify();
+    }
+
+    @Test
+    void shouldUpdateOrderStatus() {
+        var orderId = new UUID(1L, 1L);
+        var order = new Order(orderId, new UUID(2L, 2L), List.of(new OrderItem(
+                new UUID(3L, 3L), 2, new Money(new BigDecimal("25.50")))), OrderStatus.PROCESSING, null);
+        when(orderRepository.updateStatus(orderId, "PROCESSING")).thenReturn(Mono.just(1));
+
+        StepVerifier.create(adapter.updateStatus(order))
+                .expectNext(order)
+                .verifyComplete();
+    }
+
+    @Test
+    void shouldMapPersistenceFailuresWhenUpdatingOrderStatus() {
+        var orderId = new UUID(1L, 1L);
+        var order = new Order(orderId, new UUID(2L, 2L), List.of(new OrderItem(
+                new UUID(3L, 3L), 2, new Money(new BigDecimal("25.50")))), OrderStatus.PROCESSING, null);
+        when(orderRepository.updateStatus(orderId, "PROCESSING"))
+                .thenReturn(Mono.error(new DataAccessResourceFailureException("connection failed")));
+
+        StepVerifier.create(adapter.updateStatus(order))
                 .expectError(RepositoryUnavailableException.class)
                 .verify();
     }

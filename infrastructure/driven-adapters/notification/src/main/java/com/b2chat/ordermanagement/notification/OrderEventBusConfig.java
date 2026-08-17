@@ -1,5 +1,6 @@
 package com.b2chat.ordermanagement.notification;
 
+import com.b2chat.ordermanagement.model.order.OrderCompletedEvent;
 import com.b2chat.ordermanagement.model.order.OrderPlacedEvent;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -10,5 +11,10 @@ public class OrderEventBusConfig {
     @Bean
     public Sinks.Many<OrderPlacedEvent> orderPlacedSink() {
         return Sinks.many().multicast().<OrderPlacedEvent>onBackpressureBuffer();
+    }
+
+    @Bean
+    public Sinks.Many<OrderCompletedEvent> orderCompletedSink() {
+        return Sinks.many().multicast().<OrderCompletedEvent>onBackpressureBuffer();
     }
 }

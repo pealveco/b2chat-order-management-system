@@ -32,6 +32,10 @@ public final class Order {
         return new Order(id, userId, items, status, createdAt);
     }
 
+    public Order withStatus(OrderStatus status) {
+        return new Order(id, userId, items, status, createdAt);
+    }
+
     private static UUID requireUserId(UUID userId) {
         if (userId == null) {
             throw new RequiredFieldException("userId");

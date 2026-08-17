@@ -23,4 +23,12 @@ public interface ProductReactiveRepository extends ReactiveCrudRepository<Produc
               AND stock >= :quantity
             """)
     Mono<Integer> decrementStockIfAvailable(@Param("productId") UUID productId, @Param("quantity") int quantity);
+
+    @Modifying
+    @Query("""
+            UPDATE products
+            SET stock = stock + :quantity
+            WHERE id = :productId
+            """)
+    Mono<Integer> incrementStock(@Param("productId") UUID productId, @Param("quantity") int quantity);
 }

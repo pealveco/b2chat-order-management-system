@@ -168,4 +168,14 @@ class ProductReactiveRepositoryAdapterTest {
                 .expectNext(false)
                 .verifyComplete();
     }
+
+    @Test
+    void shouldIncrementStock() {
+        var id = UUID.randomUUID();
+        when(repository.incrementStock(id, 2)).thenReturn(Mono.just(1));
+
+        StepVerifier.create(repositoryAdapter.incrementStock(id, 2))
+                .expectNext(true)
+                .verifyComplete();
+    }
 }

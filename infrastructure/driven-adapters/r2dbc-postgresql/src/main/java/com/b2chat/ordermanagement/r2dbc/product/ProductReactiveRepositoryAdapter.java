@@ -73,4 +73,12 @@ public class ProductReactiveRepositoryAdapter extends ReactiveAdapterOperations<
                 .onErrorMap(DataAccessException.class,
                         error -> new RepositoryUnavailableException("Product repository is temporarily unavailable", error));
     }
+
+    @Override
+    public Mono<Boolean> incrementStock(UUID productId, int quantity) {
+        return repository.incrementStock(productId, quantity)
+                .map(updatedRows -> updatedRows > 0)
+                .onErrorMap(DataAccessException.class,
+                        error -> new RepositoryUnavailableException("Product repository is temporarily unavailable", error));
+    }
 }

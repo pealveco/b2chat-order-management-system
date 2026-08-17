@@ -43,7 +43,7 @@ public class PlaceOrderUseCase {
                 .flatMap(orderRepository::save));
 
         return transactionPort.transactional(transaction)
-                .flatMap(order -> evictProductsFromCache(requestedItems).thenReturn(order))
+                .flatMap(order -> refreshProductsInCache(requestedItems).thenReturn(order))
                 .doOnNext(order -> orderEventPublisher.publishOrderPlaced(
                         new OrderPlacedEvent(order.getId(), order.getUserId(), order.getCreatedAt())));
     }
@@ -62,12 +62,18 @@ public class PlaceOrderUseCase {
                         : Mono.error(new InsufficientStockException(product.getId(), quantity)));
     }
 
-    private Mono<Void> evictProductsFromCache(List<PlaceOrderItemCommand> items) {
+    private Mono<Void> refreshProductsInCache(List<PlaceOrderItemCommand> items) {
         return Flux.fromIterable(items)
                 .map(PlaceOrderItemCommand::productId)
                 .distinct()
-                .flatMap(productCachePort::evict)
+                .flatMap(this::refreshProductInCache)
                 .onErrorResume(error -> Mono.empty())
+                .then();
+    }
+
+    private Mono<Void> refreshProductInCache(UUID productId) {
+        return productRepository.findById(productId)
+                .flatMap(productCachePort::put)
                 .then();
     }
 

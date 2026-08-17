@@ -67,7 +67,7 @@ class PlaceOrderUseCaseTest {
             var order = invocation.getArgument(0, Order.class);
             return Mono.just(order.withId(orderId));
         });
-        when(productCachePort.evict(productId)).thenReturn(Mono.empty());
+        when(productCachePort.put(any())).thenReturn(Mono.empty());
 
         StepVerifier.create(useCase.execute(userId, List.of(new PlaceOrderItemCommand(productId, 2))))
                 .expectNextMatches(order -> order.getId().equals(orderId)
@@ -77,7 +77,7 @@ class PlaceOrderUseCaseTest {
                 .verifyComplete();
 
         verify(orderRepository).save(any());
-        verify(productCachePort).evict(productId);
+        verify(productCachePort).put(any());
         verify(orderEventPublisher).publishOrderPlaced(any());
     }
 
@@ -124,7 +124,7 @@ class PlaceOrderUseCaseTest {
                 .verify();
 
         verify(orderRepository, never()).save(any());
-        verify(productCachePort, never()).evict(any());
+        verify(productCachePort, never()).put(any());
         verify(orderEventPublisher, never()).publishOrderPlaced(any());
     }
 

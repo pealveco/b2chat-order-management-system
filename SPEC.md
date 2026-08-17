@@ -85,6 +85,7 @@ public enum OrderStatus {
     PENDING, PROCESSING, COMPLETED, CANCELLED;
 
     public boolean canTransitionTo(OrderStatus target) {
+        // Mismo estado -> permitido como operación idempotente
         // PENDING -> PROCESSING, CANCELLED
         // PROCESSING -> COMPLETED, CANCELLED
         // COMPLETED -> (terminal, sin transiciones)
@@ -108,7 +109,8 @@ Los value objects no tienen gateway/repository propio. Ejemplo: `Email` y `Money
 // OrderPlacedEvent.java
 public record OrderPlacedEvent(UUID orderId, UUID userId, Instant occurredAt) {}
 
-// Eventos adicionales como OrderCompletedEvent se agregarán cuando la HU de estados los requiera.
+// OrderCompletedEvent.java
+public record OrderCompletedEvent(UUID orderId, UUID userId, Instant occurredAt) {}
 ```
 
 ---
@@ -138,13 +140,14 @@ public interface ProductRepository {
     Flux<Product> findAll();         // solo productos activos
     Mono<Boolean> decrementStockIfAvailable(UUID productId, int quantity);
     // ^ UPDATE condicional atómico: WHERE id=? AND active=true AND stock >= ? -> retorna filas afectadas
-    // incrementStock se agregará cuando la HU de cancelación lo requiera.
+    Mono<Boolean> incrementStock(UUID productId, int quantity);
 }
 
 public interface OrderRepository {
     Mono<Order> save(Order order);
     Mono<Order> findById(UUID id);
-    // findByUserId y updateStatus se agregan cuando las HUs de consulta/estado los requieran.
+    Mono<Order> updateStatus(Order order);
+    // findByUserId se agregará cuando la HU de consulta por usuario lo requiera.
 }
 
 // Puerto de cache
@@ -158,6 +161,7 @@ public interface ProductCachePort {
 // Puerto de eventos/notificación
 public interface OrderEventPublisher {
     void publishOrderPlaced(OrderPlacedEvent event);
+    void publishOrderCompleted(OrderCompletedEvent event);
 }
 
 // Puerto transaccional
@@ -178,12 +182,12 @@ public interface TransactionPort {
 | `ListProductsUseCase` | `ProductRepository`, `ProductCachePort` | Intenta cache → si vacío o expirado, lee Postgres y repuebla cache (read-through) |
 | `UpdateProductUseCase` | `ProductRepository`, `ProductCachePort` | Actualiza Postgres → actualiza cache (write-through) |
 | `DeleteProductUseCase` | `ProductRepository`, `ProductCachePort` | Soft delete en Postgres (`active=false`) → evict de cache |
-| `PlaceOrderUseCase` | `UserRepository`, `ProductRepository`, `ProductCachePort`, `OrderRepository`, `OrderEventPublisher`, `TransactionPort` | Valida usuario existe → valida cada producto existe → `decrementStockIfAvailable` por cada ítem dentro de transacción → guarda `Order` en `PENDING` → confirma Postgres → invalida cache de productos afectados → publica `OrderPlacedEvent` |
+| `PlaceOrderUseCase` | `UserRepository`, `ProductRepository`, `ProductCachePort`, `OrderRepository`, `OrderEventPublisher`, `TransactionPort` | Valida usuario existe → valida cada producto existe → `decrementStockIfAvailable` por cada ítem dentro de transacción → guarda `Order` en `PENDING` → confirma Postgres → refresca cache de productos afectados → publica `OrderPlacedEvent` |
 | `GetOrderUseCase` | `OrderRepository` | Busca por ID → `OrderNotFoundException` si no existe |
-| `UpdateOrderStatusUseCase` *(planeado)* | `OrderRepository`, `ProductRepository`, `OrderEventPublisher` | Valida transición con `OrderStatus.canTransitionTo` → si es a `CANCELLED`, repone stock (`incrementStock` por cada ítem) → si es a `COMPLETED`, publicará un evento de completado cuando esa HU exista |
+| `UpdateOrderStatusUseCase` | `OrderRepository`, `ProductRepository`, `ProductCachePort`, `OrderEventPublisher`, `TransactionPort` | Busca pedido → valida transición con `OrderStatus.canTransitionTo` → si es a `CANCELLED`, repone stock (`incrementStock` por cada ítem) dentro de transacción y refresca cache → si es a `COMPLETED`, publica `OrderCompletedEvent` después de confirmar |
 | `GetUserOrdersUseCase` *(planeado / bonus)* | `UserRepository`, `OrderRepository` | Valida usuario existe → retorna `Flux<Order>` |
 
-**Nota de atomicidad en `PlaceOrderUseCase`:** usar un puerto transaccional implementado con `TransactionalOperator` de Spring/R2DBC para envolver la secuencia de descuentos + guardado del pedido. Si cualquier producto falla por inexistente o stock insuficiente, toda la operación de Postgres hace rollback — no debe quedar un pedido con descuentos parciales. Redis y la notificación quedan fuera de la transacción de base de datos: cache se invalida después de confirmar Postgres y la notificación se emite como evento desacoplado.
+**Nota de atomicidad en `PlaceOrderUseCase`:** usar un puerto transaccional implementado con `TransactionalOperator` de Spring/R2DBC para envolver la secuencia de descuentos + guardado del pedido. Si cualquier producto falla por inexistente o stock insuficiente, toda la operación de Postgres hace rollback — no debe quedar un pedido con descuentos parciales. Redis y la notificación quedan fuera de la transacción de base de datos: cache se refresca después de confirmar Postgres y la notificación se emite como evento desacoplado.
 
 ---
 
@@ -480,10 +484,37 @@ Respuestas mínimas profesionales cubiertas para `GET /orders/{id}`:
 // Request
 { "status": "PROCESSING" }
 // Response 200
-{ "id": "uuid", "status": "PROCESSING", ... }
+{
+  "data": {
+    "id": "uuid",
+    "userId": "uuid",
+    "status": "PROCESSING",
+    "createdAt": "2026-08-17T12:00:00Z",
+    "items": [
+      { "productId": "uuid", "quantity": 2, "unitPriceAtOrderTime": 25000.00 }
+    ]
+  },
+  "meta": { "path": "/orders/{id}/status", "timestamp": "2026-08-17T12:00:00Z" }
+}
 // Response 400 (transición inválida)
-{ "error": "INVALID_STATUS_TRANSITION", "message": "Cannot transition from COMPLETED to PENDING" }
+{
+  "error": {
+    "code": "INVALID_ORDER_STATUS_TRANSITION",
+    "message": "Order status cannot transition from COMPLETED to PENDING",
+    "status": 400
+  }
+}
 ```
+
+Respuestas mínimas profesionales cubiertas para `PUT /orders/{id}/status`:
+
+| Status | Caso |
+|---|---|
+| `200 OK` | Estado actualizado o mismo estado idempotente |
+| `400 Bad Request` | `id` inválido, body inválido, status no soportado o transición inválida |
+| `404 Not Found` | Pedido inexistente |
+| `503 Service Unavailable` | Persistencia temporalmente no disponible |
+| `500 Internal Server Error` | Fallback no controlado |
 
 **`GET /users/{id}/orders`** (Bonus) → `200`, array de pedidos del usuario (vacío si no tiene).
 
@@ -498,7 +529,7 @@ Respuestas mínimas profesionales cubiertas para `GET /orders/{id}`:
 ```
 
 Endpoints protegidos (requieren `Authorization: Bearer {token}`): operaciones de escritura operativas (`POST`, `PUT`, `DELETE`) según alcance de cada HU. `POST /users` queda público para registro. `POST /products`, `PUT /products/{id}` y `DELETE /products/{id}` quedan temporalmente públicos durante US-003/US-005/US-006 porque aún no existe HU de autenticación/roles de administrador. Los `GET` quedan abiertos salvo que una HU indique lo contrario.
-`POST /orders` queda temporalmente público durante US-007 para facilitar la prueba funcional sin flujo de autenticación aún implementado.
+`POST /orders` y `PUT /orders/{id}/status` quedan temporalmente públicos durante las HUs de pedidos para facilitar la prueba funcional sin flujo de autenticación/roles aún implementado.
 
 ---
 
@@ -651,29 +682,34 @@ product:{productId}   -> JSON serializado del producto {id, name, description, p
 products:all          -> Set de productId usados para reconstruir el listado sin KEYS *
 ```
 
-US-003 escribe `product:{id}` y registra el id en `products:all`. US-004 combina read-through: consultar Redis primero; si la entrada individual o el índice de catálogo no existe o está incompleto, leer Postgres, responder y repoblar Redis. US-005 actualiza la clave individual después de confirmar Postgres. US-006 y US-007 invalidan las claves afectadas después de confirmar Postgres para que la siguiente lectura repueble desde la fuente de verdad.
+US-003 escribe `product:{id}` y registra el id en `products:all`. US-004 combina read-through: consultar Redis primero; si la entrada individual o el índice de catálogo no existe o está incompleto, leer Postgres, responder y repoblar Redis. US-005 actualiza la clave individual después de confirmar Postgres. US-006 invalida cache por soft delete. US-007 y US-010 refrescan las claves afectadas después de confirmar Postgres para que el catálogo conserve `products:all` completo y `product:{id}` actualizado.
 
 TTL recomendado para catálogo:
 
 - Usar TTL en productos individuales para evitar datos indefinidamente obsoletos.
 - Aplicar TTLs escalonados con jitter, por ejemplo 10-15 minutos por producto, para evitar expiración masiva simultánea.
 - Evaluar un job programado que refresque claves cercanas a expirar desde Postgres. Ese job no reemplaza la fuente de verdad; solo reduce misses y latencia.
-- En escrituras (`POST`, `PUT`, `DELETE` y descuento de stock por pedidos) mantener write-through/evict para que los cambios importantes actualicen o invaliden cache inmediatamente.
+- En escrituras (`POST`, `PUT`, `DELETE` y cambios de stock por pedidos) mantener write-through/refresh/evict según el caso: creación/actualización refrescan, soft delete elimina del índice, pedidos refrescan stock.
 
 ---
 
 ## 9. Mecanismo async (eventos en memoria)
 
-Implementado en US-007: la operación crítica de negocio es síncrona y transaccional
+Implementado en US-007 y extendido en US-010: la operación crítica de negocio es síncrona y transaccional
 validar usuario, validar productos, descontar stock y persistir la orden. Solo la notificación
-de recepción del pedido es asíncrona.
+de recepción/completado del pedido es asíncrona.
 
 ```java
 // OrderEventPublisherAdapter.java (infrastructure/driven-adapters/notification)
 private final Sinks.Many<OrderPlacedEvent> orderPlacedSink;
+private final Sinks.Many<OrderCompletedEvent> orderCompletedSink;
 
 public void publishOrderPlaced(OrderPlacedEvent event) {
     orderPlacedSink.tryEmitNext(event);
+}
+
+public void publishOrderCompleted(OrderCompletedEvent event) {
+    orderCompletedSink.tryEmitNext(event);
 }
 // listener suscrito en el arranque de la app (applications/app-service) consume el Flux
 // y ejecuta el "envío" de notificación (log estructurado) sin bloquear el hilo de la request HTTP

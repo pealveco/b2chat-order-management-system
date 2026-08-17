@@ -6,6 +6,7 @@ import com.b2chat.ordermanagement.model.common.gateways.TransactionPort;
 import com.b2chat.ordermanagement.model.email.Email;
 import com.b2chat.ordermanagement.model.money.Money;
 import com.b2chat.ordermanagement.model.order.Order;
+import com.b2chat.ordermanagement.model.order.OrderStatus;
 import com.b2chat.ordermanagement.model.orderitem.OrderItem;
 import com.b2chat.ordermanagement.model.order.gateways.OrderEventPublisher;
 import com.b2chat.ordermanagement.model.order.gateways.OrderRepository;
@@ -16,6 +17,7 @@ import com.b2chat.ordermanagement.model.user.User;
 import com.b2chat.ordermanagement.model.user.gateways.UserRepository;
 import com.b2chat.ordermanagement.usecase.getorder.GetOrderUseCase;
 import com.b2chat.ordermanagement.usecase.placeorder.PlaceOrderUseCase;
+import com.b2chat.ordermanagement.usecase.updateorderstatus.UpdateOrderStatusUseCase;
 import jakarta.validation.Validation;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -59,8 +61,11 @@ class OrderRouterRestTest {
         var placeOrderUseCase = new PlaceOrderUseCase(userRepository, productRepository, productCachePort,
                 orderRepository, orderEventPublisher, transactionPort);
         var getOrderUseCase = new GetOrderUseCase(orderRepository);
+        var updateOrderStatusUseCase = new UpdateOrderStatusUseCase(orderRepository, productRepository,
+                productCachePort, orderEventPublisher, transactionPort);
         var validator = Validation.buildDefaultValidatorFactory().getValidator();
-        var handler = new OrderHandler(placeOrderUseCase, getOrderUseCase, new RequestValidator(validator));
+        var handler = new OrderHandler(placeOrderUseCase, getOrderUseCase, updateOrderStatusUseCase,
+                new RequestValidator(validator));
         var router = new OrderRouterRest().orderRoutes(handler);
         var handlerStrategies = HandlerStrategies.builder()
                 .exceptionHandler(new GlobalErrorWebExceptionHandler(new ObjectMapper()))
@@ -82,7 +87,7 @@ class OrderRouterRestTest {
             var order = invocation.getArgument(0, Order.class);
             return Mono.just(order.withId(orderId));
         });
-        when(productCachePort.evict(productId)).thenReturn(Mono.empty());
+        when(productCachePort.put(any())).thenReturn(Mono.empty());
 
         webTestClient.post()
                 .uri("/orders")
@@ -219,7 +224,7 @@ class OrderRouterRestTest {
                 .jsonPath("$.error.status").isEqualTo(409);
 
         verify(orderRepository, never()).save(any());
-        verify(productCachePort, never()).evict(any());
+        verify(productCachePort, never()).put(any());
         verify(orderEventPublisher, never()).publishOrderPlaced(any());
     }
 
@@ -237,6 +242,137 @@ class OrderRouterRestTest {
                 .jsonPath("$.error.code").isEqualTo("INVALID_REQUEST")
                 .jsonPath("$.error.details[?(@.field == 'userId')]").exists()
                 .jsonPath("$.error.details[?(@.field == 'items')]").exists();
+    }
+
+    @Test
+    void shouldUpdateOrderStatus() {
+        var orderId = new UUID(3L, 3L);
+        when(orderRepository.findById(orderId)).thenReturn(Mono.just(order(orderId, OrderStatus.PENDING)));
+        when(orderRepository.updateStatus(any(Order.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        webTestClient.put()
+                .uri("/orders/00000000-0000-0003-0000-000000000003/status")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {"status":"PROCESSING"}
+                        """)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.data.id").isEqualTo(orderId.toString())
+                .jsonPath("$.data.status").isEqualTo("PROCESSING")
+                .jsonPath("$.meta.path").isEqualTo("/orders/00000000-0000-0003-0000-000000000003/status");
+    }
+
+    @Test
+    void shouldPublishCompletedEventWhenOrderIsCompleted() {
+        var orderId = new UUID(3L, 3L);
+        when(orderRepository.findById(orderId)).thenReturn(Mono.just(order(orderId, OrderStatus.PROCESSING)));
+        when(orderRepository.updateStatus(any(Order.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        webTestClient.put()
+                .uri("/orders/00000000-0000-0003-0000-000000000003/status")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {"status":"COMPLETED"}
+                        """)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.data.status").isEqualTo("COMPLETED");
+
+        verify(orderEventPublisher).publishOrderCompleted(any());
+    }
+
+    @Test
+    void shouldRestoreStockWhenOrderIsCancelled() {
+        var orderId = new UUID(3L, 3L);
+        var productId = new UUID(2L, 2L);
+        when(orderRepository.findById(orderId)).thenReturn(Mono.just(order(orderId, OrderStatus.PROCESSING)));
+        when(productRepository.incrementStock(productId, 2)).thenReturn(Mono.just(true));
+        when(productRepository.findById(productId)).thenReturn(Mono.just(product(productId)));
+        when(productCachePort.put(any())).thenReturn(Mono.empty());
+        when(orderRepository.updateStatus(any(Order.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        webTestClient.put()
+                .uri("/orders/00000000-0000-0003-0000-000000000003/status")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {"status":"CANCELLED"}
+                        """)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.data.status").isEqualTo("CANCELLED");
+
+        verify(productRepository).incrementStock(productId, 2);
+        verify(productCachePort).put(any());
+    }
+
+    @Test
+    void shouldReturnNotFoundWhenUpdatingMissingOrderStatus() {
+        var orderId = new UUID(3L, 3L);
+        when(orderRepository.findById(orderId)).thenReturn(Mono.empty());
+
+        webTestClient.put()
+                .uri("/orders/00000000-0000-0003-0000-000000000003/status")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {"status":"PROCESSING"}
+                        """)
+                .exchange()
+                .expectStatus().isNotFound()
+                .expectBody()
+                .jsonPath("$.error.code").isEqualTo("ORDER_NOT_FOUND")
+                .jsonPath("$.error.status").isEqualTo(404);
+    }
+
+    @Test
+    void shouldReturnBadRequestWhenOrderStatusTransitionIsInvalid() {
+        var orderId = new UUID(3L, 3L);
+        when(orderRepository.findById(orderId)).thenReturn(Mono.just(order(orderId, OrderStatus.COMPLETED)));
+
+        webTestClient.put()
+                .uri("/orders/00000000-0000-0003-0000-000000000003/status")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {"status":"PENDING"}
+                        """)
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.error.code").isEqualTo("INVALID_ORDER_STATUS_TRANSITION")
+                .jsonPath("$.error.status").isEqualTo(400);
+    }
+
+    @Test
+    void shouldReturnBadRequestWhenOrderStatusIsUnsupported() {
+        webTestClient.put()
+                .uri("/orders/00000000-0000-0003-0000-000000000003/status")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {"status":"SHIPPED"}
+                        """)
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.error.code").isEqualTo("INVALID_ORDER_STATUS")
+                .jsonPath("$.error.status").isEqualTo(400);
+    }
+
+    @Test
+    void shouldReturnBadRequestWhenOrderStatusIdIsInvalid() {
+        webTestClient.put()
+                .uri("/orders/not-a-uuid/status")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {"status":"PROCESSING"}
+                        """)
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.error.code").isEqualTo("INVALID_REQUEST")
+                .jsonPath("$.error.message").isEqualTo("Path variable id must be a valid UUID");
     }
 
     @Test
@@ -260,5 +396,10 @@ class OrderRouterRestTest {
 
     private Product product(UUID id) {
         return new Product(id, "Keyboard", "Mechanical keyboard", new Money(new BigDecimal("25.50")), 10);
+    }
+
+    private Order order(UUID id, OrderStatus status) {
+        return new Order(id, new UUID(1L, 1L), List.of(new OrderItem(
+                new UUID(2L, 2L), 2, new Money(new BigDecimal("25.50")))), status, null);
     }
 }

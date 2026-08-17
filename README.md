@@ -92,7 +92,7 @@ Backlog completo de historias de usuario y criterios de aceptación en [`docs/BA
 |---|---|---|
 | `POST` | `/orders` | Crear un pedido (persistencia transaccional + notificación asíncrona) *(implementado)* |
 | `GET` | `/orders/{id}` | Obtener detalle de un pedido *(implementado)* |
-| `PUT` | `/orders/{id}/status` | Actualizar estado de un pedido *(planeado)* |
+| `PUT` | `/orders/{id}/status` | Actualizar estado de un pedido *(implementado)* |
 
 ### Auth *(bonus)*
 | Método | Endpoint | Descripción |
@@ -107,6 +107,8 @@ Backlog completo de historias de usuario y criterios de aceptación en [`docs/BA
 
 ### Manejo asíncrono de pedidos
 La creación de un pedido (`POST /orders`) valida usuario, valida productos activos, descuenta stock y persiste el pedido de forma síncrona y transaccional (no puede ser "eventual", ya que involucra descuento de inventario). Lo que se procesa de forma **asíncrona** es el envío de la notificación de recepción: se emite un `OrderPlacedEvent` en memoria (`Sinks.Many` de Project Reactor) inmediatamente después de persistir, y un listener independiente procesa la notificación sin bloquear la respuesta HTTP.
+
+Cuando un pedido pasa a `COMPLETED`, se emite un `OrderCompletedEvent` usando el mismo patrón de notificación asíncrona en memoria. El listener simula el envío con un log estructurado.
 
 En un entorno productivo, este mecanismo se reemplazaría por un publisher real hacia **AWS SQS/SNS o EventBridge** — el principio de desacople (responder rápido, notificar aparte) es el mismo que se aplicaría en producción.
 
@@ -127,7 +129,7 @@ Actualmente se implementa **write-through** para productos: toda creación o act
 
 La consulta de catálogo (`GET /products`) implementa **read-through fallback**: primero intenta reconstruir la lista desde Redis usando `products:all`; ante un miss real — cache frío en el arranque, entrada incompleta, TTL expirado o evicción — lee desde Postgres, responde al cliente y repuebla Redis para futuras lecturas.
 
-Cuando `POST /orders` descuenta stock, invalida en Redis las claves de los productos afectados después de confirmar la transacción en Postgres. Así la siguiente lectura del catálogo repuebla cache desde la fuente de verdad con el stock actualizado.
+Cuando `POST /orders` descuenta stock, refresca en Redis las claves de los productos afectados después de confirmar la transacción en Postgres. Cuando `PUT /orders/{id}/status` cancela un pedido, repone stock y refresca esas mismas claves. Así `products:all` conserva el índice completo del catálogo y `product:{id}` queda con el stock actualizado.
 
 Para un entorno de mayor tráfico, el diseño completo evolucionaría a incluir TTL con jitter (para evitar expiración simultánea de claves y *thundering herd*) y un job de *refresh-ahead* que renueve proactivamente las claves antes de vencer. Esto queda documentado como evolución natural del diseño — ver [Assumptions](#assumptions).
 
@@ -146,7 +148,7 @@ Decisiones de alcance no especificadas explícitamente en el enunciado de la pru
 4. **Cancelación de pedidos:** al cancelar un pedido, se repone automáticamente el stock descontado.
 5. **Autenticación JWT:** endpoint simplificado de emisión de token basado en `userId`/`email` existente, sin flujo completo de credenciales/password, dado que el enunciado no lo especifica. Los endpoints de escritura quedarán protegidos cuando se implemente autenticación/roles; por ahora las escrituras de productos están públicas temporalmente para probar las HUs.
 6. **Concurrencia en stock:** UPDATE condicional atómico a nivel de base de datos, no lectura-luego-escritura en código.
-7. **Consistencia de cache en pedidos:** al crear pedidos se invalida cache de productos afectados después de confirmar Postgres; no se intenta actualizar Redis dentro de la transacción de base de datos.
+7. **Consistencia de cache en pedidos:** al crear o cancelar pedidos se refresca cache de productos afectados después de confirmar Postgres; no se intenta actualizar Redis dentro de la transacción de base de datos.
 
 ---
 
