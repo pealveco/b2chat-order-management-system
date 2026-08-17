@@ -90,7 +90,7 @@ Backlog completo de historias de usuario y criterios de aceptación en [`docs/BA
 ### Orders
 | Método | Endpoint | Descripción |
 |---|---|---|
-| `POST` | `/orders` | Crear un pedido (procesamiento asíncrono + notificación) *(planeado)* |
+| `POST` | `/orders` | Crear un pedido (persistencia transaccional + notificación asíncrona) *(implementado)* |
 | `GET` | `/orders/{id}` | Obtener detalle de un pedido *(planeado)* |
 | `PUT` | `/orders/{id}/status` | Actualizar estado de un pedido *(planeado)* |
 
@@ -106,7 +106,7 @@ Backlog completo de historias de usuario y criterios de aceptación en [`docs/BA
 ## Decisiones de diseño
 
 ### Manejo asíncrono de pedidos
-La creación de un pedido (`POST /orders`) valida stock y persiste el pedido de forma síncrona y transaccional (no puede ser "eventual", ya que involucra descuento de inventario). Lo que se procesa de forma **asíncrona** es el envío de la notificación de recepción: se emite un evento en memoria (`Sinks.Many` de Project Reactor) inmediatamente después de persistir, y un listener independiente procesa la notificación sin bloquear la respuesta HTTP. El mismo mecanismo dispara la notificación de pedido completado (bonus).
+La creación de un pedido (`POST /orders`) valida usuario, valida productos activos, descuenta stock y persiste el pedido de forma síncrona y transaccional (no puede ser "eventual", ya que involucra descuento de inventario). Lo que se procesa de forma **asíncrona** es el envío de la notificación de recepción: se emite un `OrderPlacedEvent` en memoria (`Sinks.Many` de Project Reactor) inmediatamente después de persistir, y un listener independiente procesa la notificación sin bloquear la respuesta HTTP.
 
 En un entorno productivo, este mecanismo se reemplazaría por un publisher real hacia **AWS SQS/SNS o EventBridge** — el principio de desacople (responder rápido, notificar aparte) es el mismo que se aplicaría en producción.
 
@@ -115,7 +115,7 @@ Para evitar sobreventa bajo pedidos concurrentes, el descuento de stock **no** u
 
 ```sql
 UPDATE products SET stock = stock - :quantity
-WHERE id = :productId AND stock >= :quantity;
+WHERE id = :productId AND active = TRUE AND stock >= :quantity;
 ```
 
 Si el número de filas afectadas es 0, se interpreta como stock insuficiente y la operación se aborta.
@@ -124,6 +124,8 @@ Si el número de filas afectadas es 0, se interpreta como stock insuficiente y l
 Actualmente se implementa **write-through** para productos: toda creación o actualización de producto persiste primero en Postgres y, si la persistencia confirma, escribe el producto en Redis con la clave `product:{id}` y registra el id en el set `products:all`. La eliminación usa soft delete en Postgres (`active=false`) y luego elimina la clave individual de Redis y remueve el id del set `products:all`.
 
 La consulta de catálogo (`GET /products`) implementa **read-through fallback**: primero intenta reconstruir la lista desde Redis usando `products:all`; ante un miss real — cache frío en el arranque, entrada incompleta, TTL expirado o evicción — lee desde Postgres, responde al cliente y repuebla Redis para futuras lecturas.
+
+Cuando `POST /orders` descuenta stock, invalida en Redis las claves de los productos afectados después de confirmar la transacción en Postgres. Así la siguiente lectura del catálogo repuebla cache desde la fuente de verdad con el stock actualizado.
 
 Para un entorno de mayor tráfico, el diseño completo evolucionaría a incluir TTL con jitter (para evitar expiración simultánea de claves y *thundering herd*) y un job de *refresh-ahead* que renueve proactivamente las claves antes de vencer. Esto queda documentado como evolución natural del diseño — ver [Assumptions](#assumptions).
 
@@ -142,6 +144,7 @@ Decisiones de alcance no especificadas explícitamente en el enunciado de la pru
 4. **Cancelación de pedidos:** al cancelar un pedido, se repone automáticamente el stock descontado.
 5. **Autenticación JWT:** endpoint simplificado de emisión de token basado en `userId`/`email` existente, sin flujo completo de credenciales/password, dado que el enunciado no lo especifica. Los endpoints de escritura quedarán protegidos cuando se implemente autenticación/roles; por ahora las escrituras de productos están públicas temporalmente para probar las HUs.
 6. **Concurrencia en stock:** UPDATE condicional atómico a nivel de base de datos, no lectura-luego-escritura en código.
+7. **Consistencia de cache en pedidos:** al crear pedidos se invalida cache de productos afectados después de confirmar Postgres; no se intenta actualizar Redis dentro de la transacción de base de datos.
 
 ---
 
@@ -151,8 +154,7 @@ Decisiones de alcance no especificadas explícitamente en el enunciado de la pru
 - **Integración:** endpoints críticos (registro de usuario, creación de pedido, actualización de estado) contra instancias reales de PostgreSQL y Redis vía Testcontainers.
 
 ```bash
-# (placeholder — comando exacto se confirma al finalizar el setup de testing)
-./gradlew test
+./gradlew :model:test :usecase:test :r2dbc-postgresql:test :notification:test :reactive-web:test :app-service:classes
 ```
 
 ---

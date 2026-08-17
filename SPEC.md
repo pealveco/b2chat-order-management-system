@@ -34,7 +34,7 @@ Usar las tareas del scaffold (`Generate Driven Adapter` / `Generate Entry Point`
 |---|---|---|
 | `infrastructure/driven-adapters/r2dbc-postgresql` | Driven adapter | Persistencia de `users`, `products`, `orders`, `order_items` |
 | `infrastructure/driven-adapters/redis` | Driven adapter | Cache write-through + read-through del catálogo de productos |
-| `infrastructure/driven-adapters/notification-adapter` | Driven adapter (custom, no viene por defecto en el scaffold — crear manualmente siguiendo la misma convención de carpeta) | Listener de eventos `OrderPlacedEvent` / `OrderCompletedEvent`, simula envío de notificación (log estructurado) |
+| `infrastructure/driven-adapters/notification` | Driven adapter genérico del scaffold | Publisher/listener de eventos `OrderPlacedEvent`, simula envío de notificación de recepción (log estructurado) |
 | `infrastructure/entry-points/reactive-web` | Entry point | Handlers/Routers funcionales WebFlux + filtro de seguridad JWT |
 
 **Nota:** confirmar contra `gradle generateDrivenAdapter` (listado de tipos disponibles) que `r2dbc` y `redis` estén soportados como tipos nativos del scaffold antes de generarlos — si el nombre exacto de la tarea difiere, ajustar aquí y no asumir.
@@ -108,13 +108,21 @@ Los value objects no tienen gateway/repository propio. Ejemplo: `Email` y `Money
 // OrderPlacedEvent.java
 public record OrderPlacedEvent(UUID orderId, UUID userId, Instant occurredAt) {}
 
-// OrderCompletedEvent.java
-public record OrderCompletedEvent(UUID orderId, UUID userId, Instant occurredAt) {}
+// Eventos adicionales como OrderCompletedEvent se agregarán cuando la HU de estados los requiera.
 ```
 
 ---
 
-## 4. Puertos de dominio (interfaces definidas en `domain/usecase`, implementadas en `infrastructure`)
+## 4. Puertos de dominio (interfaces definidas en `domain/model`, implementadas en `infrastructure`)
+
+### 4.0 Convención de nombres para puertos
+
+Aunque todos estos contratos son puertos en términos de Clean Architecture, se usa una convención semántica para evitar nombres artificiales:
+
+- Usar sufijo `Repository` cuando el puerto representa persistencia principal de un agregado en la fuente de verdad. Ejemplos: `UserRepository`, `ProductRepository`, `OrderRepository`.
+- Usar sufijo `Port` cuando el puerto representa una capacidad técnica o secundaria que no es el repositorio principal del agregado. Ejemplos: `ProductCachePort`, `TransactionPort`.
+- Usar nombres por rol cuando expresan mejor la intención del puerto que un sufijo genérico. Ejemplo: `OrderEventPublisher`, porque su responsabilidad es publicar eventos, no persistir entidades.
+- Mantener esta regla para nuevas HUs: no forzar todo a `Repository` si no representa persistencia de agregados, y no renombrar repositories generados por el scaffold si ya expresan correctamente el rol de persistencia.
 
 ```java
 // Puertos de persistencia
@@ -128,17 +136,14 @@ public interface ProductRepository {
     Mono<Product> save(Product product);
     Mono<Product> findById(UUID id); // solo productos activos para operaciones de catálogo
     Flux<Product> findAll();         // solo productos activos
-    // Los siguientes métodos se agregan cuando las HUs los necesiten:
-    Mono<Long> decrementStockIfAvailable(UUID productId, int quantity);
-    // ^ UPDATE condicional atómico: WHERE id=? AND stock >= ? -> retorna filas afectadas
-    Mono<Void> incrementStock(UUID productId, int quantity); // usado en cancelación
+    Mono<Boolean> decrementStockIfAvailable(UUID productId, int quantity);
+    // ^ UPDATE condicional atómico: WHERE id=? AND active=true AND stock >= ? -> retorna filas afectadas
+    // incrementStock se agregará cuando la HU de cancelación lo requiera.
 }
 
 public interface OrderRepository {
     Mono<Order> save(Order order);
-    Mono<Order> findById(UUID id);
-    Flux<Order> findByUserId(UUID userId);
-    Mono<Order> updateStatus(UUID orderId, OrderStatus newStatus);
+    // findById, findByUserId y updateStatus se agregan cuando las HUs de consulta/estado los requieran.
 }
 
 // Puerto de cache
@@ -147,14 +152,16 @@ public interface ProductCachePort {
     Mono<Void> evict(UUID productId);         // borra product:{id} y remueve products:all
     Flux<Product> getAll();
     Mono<Void> putAll(List<Product> products); // repoblado read-through
-    // Los siguientes métodos se agregan cuando las HUs los necesiten:
-    Mono<Product> get(UUID productId);
 }
 
 // Puerto de eventos/notificación
 public interface OrderEventPublisher {
     void publishOrderPlaced(OrderPlacedEvent event);
-    void publishOrderCompleted(OrderCompletedEvent event);
+}
+
+// Puerto transaccional
+public interface TransactionPort {
+    <T> Mono<T> transactional(Mono<T> publisher);
 }
 ```
 
@@ -170,12 +177,12 @@ public interface OrderEventPublisher {
 | `ListProductsUseCase` | `ProductRepository`, `ProductCachePort` | Intenta cache → si vacío o expirado, lee Postgres y repuebla cache (read-through) |
 | `UpdateProductUseCase` | `ProductRepository`, `ProductCachePort` | Actualiza Postgres → actualiza cache (write-through) |
 | `DeleteProductUseCase` | `ProductRepository`, `ProductCachePort` | Soft delete en Postgres (`active=false`) → evict de cache |
-| `PlaceOrderUseCase` | `UserRepository`, `ProductRepository`, `OrderRepository`, `OrderEventPublisher` | Valida usuario existe → valida cada producto existe → `decrementStockIfAvailable` por cada ítem (si alguno falla, abortar toda la operación — ver nota de atomicidad abajo) → guarda `Order` en `PENDING` → publica `OrderPlacedEvent` |
-| `GetOrderUseCase` | `OrderRepository` | Busca por ID → error de dominio si no existe |
-| `UpdateOrderStatusUseCase` | `OrderRepository`, `ProductRepository`, `OrderEventPublisher` | Valida transición con `OrderStatus.canTransitionTo` → si es a `CANCELLED`, repone stock (`incrementStock` por cada ítem) → si es a `COMPLETED`, publica `OrderCompletedEvent` |
-| `GetUserOrdersUseCase` | `UserRepository`, `OrderRepository` | Valida usuario existe → retorna `Flux<Order>` |
+| `PlaceOrderUseCase` | `UserRepository`, `ProductRepository`, `ProductCachePort`, `OrderRepository`, `OrderEventPublisher`, `TransactionPort` | Valida usuario existe → valida cada producto existe → `decrementStockIfAvailable` por cada ítem dentro de transacción → guarda `Order` en `PENDING` → confirma Postgres → invalida cache de productos afectados → publica `OrderPlacedEvent` |
+| `GetOrderUseCase` *(planeado)* | `OrderRepository` | Busca por ID → error de dominio si no existe |
+| `UpdateOrderStatusUseCase` *(planeado)* | `OrderRepository`, `ProductRepository`, `OrderEventPublisher` | Valida transición con `OrderStatus.canTransitionTo` → si es a `CANCELLED`, repone stock (`incrementStock` por cada ítem) → si es a `COMPLETED`, publicará un evento de completado cuando esa HU exista |
+| `GetUserOrdersUseCase` *(planeado / bonus)* | `UserRepository`, `OrderRepository` | Valida usuario existe → retorna `Flux<Order>` |
 
-**Nota de atomicidad en `PlaceOrderUseCase`:** dado que R2DBC no maneja transacciones distribuidas triviales entre múltiples `decrementStockIfAvailable` reactivos, usar `@Transactional` reactivo (`TransactionalOperator` de Spring) envolviendo la secuencia de descuentos + guardado del pedido, de modo que si cualquier producto falla por stock insuficiente, toda la operación hace rollback — no debe quedar un pedido con descuentos parciales.
+**Nota de atomicidad en `PlaceOrderUseCase`:** usar un puerto transaccional implementado con `TransactionalOperator` de Spring/R2DBC para envolver la secuencia de descuentos + guardado del pedido. Si cualquier producto falla por inexistente o stock insuficiente, toda la operación de Postgres hace rollback — no debe quedar un pedido con descuentos parciales. Redis y la notificación quedan fuera de la transacción de base de datos: cache se invalida después de confirmar Postgres y la notificación se emite como evento desacoplado.
 
 ---
 
@@ -371,12 +378,56 @@ US-006 usa soft delete por regla de negocio: no elimina físicamente el registro
 **`POST /orders`**
 ```json
 // Request
-{ "userId": "uuid", "items": [ { "productId": "uuid", "quantity": 2 } ] }
+{
+  "userId": "uuid",
+  "items": [
+    { "productId": "uuid", "quantity": 2 }
+  ]
+}
 // Response 202 Accepted (async: notificación se procesa después)
-{ "id": "uuid", "userId": "uuid", "status": "PENDING", "items": [...] }
+{
+  "data": {
+    "id": "uuid",
+    "userId": "uuid",
+    "status": "PENDING",
+    "createdAt": "2026-08-16T00:00:00Z",
+    "items": [
+      {
+        "productId": "uuid",
+        "quantity": 2,
+        "unitPriceAtOrderTime": 25000
+      }
+    ]
+  },
+  "meta": {
+    "path": "/orders",
+    "timestamp": "2026-08-16T00:00:00Z"
+  }
+}
 // Response 409 (stock insuficiente)
-{ "error": "INSUFFICIENT_STOCK", "message": "Product {id} has only N units available" }
+{
+  "error": {
+    "code": "INSUFFICIENT_STOCK",
+    "message": "Product {id} does not have enough stock for quantity {quantity}",
+    "status": 409,
+    "path": "/orders",
+    "timestamp": "2026-08-16T00:00:00Z",
+    "details": []
+  }
+}
 ```
+
+Respuestas mínimas profesionales cubiertas para `POST /orders`:
+
+| Status | Caso |
+|---|---|
+| `202 Accepted` | Pedido creado en estado `PENDING`; notificación emitida de forma asíncrona |
+| `400 Bad Request` | Body inválido, body vacío, `userId`/`productId` no UUID, lista vacía o `quantity <= 0` |
+| `404 Not Found` | Usuario inexistente o producto inexistente/inactivo |
+| `409 Conflict` | Stock insuficiente |
+| `415 Unsupported Media Type` | `Content-Type` diferente de `application/json` |
+| `503 Service Unavailable` | Persistencia temporalmente no disponible |
+| `500 Internal Server Error` | Fallback no controlado |
 
 **`GET /orders/{id}`** → `200` con detalle completo, `404` si no existe.
 
@@ -403,6 +454,7 @@ US-006 usa soft delete por regla de negocio: no elimina físicamente el registro
 ```
 
 Endpoints protegidos (requieren `Authorization: Bearer {token}`): operaciones de escritura operativas (`POST`, `PUT`, `DELETE`) según alcance de cada HU. `POST /users` queda público para registro. `POST /products`, `PUT /products/{id}` y `DELETE /products/{id}` quedan temporalmente públicos durante US-003/US-005/US-006 porque aún no existe HU de autenticación/roles de administrador. Los `GET` quedan abiertos salvo que una HU indique lo contrario.
+`POST /orders` queda temporalmente público durante US-007 para facilitar la prueba funcional sin flujo de autenticación aún implementado.
 
 ---
 
@@ -468,6 +520,7 @@ Para mantener consistencia profesional en los adapters de persistencia, usar est
        UPDATE products
        SET stock = stock - :quantity
        WHERE id = :productId
+         AND active = TRUE
          AND stock >= :quantity
    """)
    Mono<Integer> decrementStockIfAvailable(UUID productId, int quantity);
@@ -490,14 +543,16 @@ Para mantener consistencia profesional en los adapters de persistencia, usar est
    ```
 
 ```sql
-CREATE TABLE users (
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email VARCHAR(255) NOT NULL UNIQUE,
     name VARCHAR(255) NOT NULL,
     address VARCHAR(500) NOT NULL
 );
 
-CREATE TABLE products (
+CREATE TABLE IF NOT EXISTS products (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(255) NOT NULL,
     description TEXT,
@@ -506,29 +561,30 @@ CREATE TABLE products (
     active BOOLEAN NOT NULL DEFAULT true
 );
 
-CREATE TABLE orders (
+CREATE TABLE IF NOT EXISTS orders (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id),
-    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
-    created_at TIMESTAMP NOT NULL DEFAULT now()
+    status VARCHAR(50) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL
 );
 
-CREATE TABLE order_items (
+CREATE TABLE IF NOT EXISTS order_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     order_id UUID NOT NULL REFERENCES orders(id),
     product_id UUID NOT NULL REFERENCES products(id),
     quantity INTEGER NOT NULL CHECK (quantity > 0),
-    unit_price_at_order_time NUMERIC(12,2) NOT NULL
+    unit_price_at_order_time NUMERIC(12, 2) NOT NULL CHECK (unit_price_at_order_time > 0)
 );
 
-CREATE INDEX idx_orders_user_id ON orders(user_id);
-CREATE INDEX idx_order_items_order_id ON order_items(order_id);
+CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
+CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_items_product_id ON order_items(product_id);
 ```
 
 **Query crítica (concurrencia de stock):**
 ```sql
 UPDATE products SET stock = stock - :quantity
-WHERE id = :productId AND stock >= :quantity;
+WHERE id = :productId AND active = TRUE AND stock >= :quantity;
 -- Verificar rowsUpdated == 0 -> stock insuficiente -> abortar
 ```
 
@@ -541,43 +597,45 @@ product:{productId}   -> JSON serializado del producto {id, name, description, p
 products:all          -> Set de productId usados para reconstruir el listado sin KEYS *
 ```
 
-US-003 escribe `product:{id}` y registra el id en `products:all`. US-004 combina read-through: consultar Redis primero; si la entrada individual o el índice de catálogo no existe o está incompleto, leer Postgres, responder y repoblar Redis.
+US-003 escribe `product:{id}` y registra el id en `products:all`. US-004 combina read-through: consultar Redis primero; si la entrada individual o el índice de catálogo no existe o está incompleto, leer Postgres, responder y repoblar Redis. US-005 actualiza la clave individual después de confirmar Postgres. US-006 y US-007 invalidan las claves afectadas después de confirmar Postgres para que la siguiente lectura repueble desde la fuente de verdad.
 
 TTL recomendado para catálogo:
 
 - Usar TTL en productos individuales para evitar datos indefinidamente obsoletos.
 - Aplicar TTLs escalonados con jitter, por ejemplo 10-15 minutos por producto, para evitar expiración masiva simultánea.
 - Evaluar un job programado que refresque claves cercanas a expirar desde Postgres. Ese job no reemplaza la fuente de verdad; solo reduce misses y latencia.
-- En escrituras (`POST`, futuro `PUT`, futuro `DELETE`) mantener write-through/evict para que los cambios importantes actualicen o invaliden cache inmediatamente.
+- En escrituras (`POST`, `PUT`, `DELETE` y descuento de stock por pedidos) mantener write-through/evict para que los cambios importantes actualicen o invaliden cache inmediatamente.
 
 ---
 
 ## 9. Mecanismo async (eventos en memoria)
 
-Pendiente para US-007: la operación crítica de negocio debe ser síncrona y transaccional
+Implementado en US-007: la operación crítica de negocio es síncrona y transaccional
 validar usuario, validar productos, descontar stock y persistir la orden. Solo la notificación
-de recepción del pedido será asíncrona.
+de recepción del pedido es asíncrona.
 
 ```java
-// OrderEventPublisherAdapter.java (infrastructure/driven-adapters/notification-adapter)
-private final Sinks.Many<Object> eventSink = Sinks.many().multicast().onBackpressureBuffer();
+// OrderEventPublisherAdapter.java (infrastructure/driven-adapters/notification)
+private final Sinks.Many<OrderPlacedEvent> orderPlacedSink;
 
 public void publishOrderPlaced(OrderPlacedEvent event) {
-    eventSink.tryEmitNext(event);
+    orderPlacedSink.tryEmitNext(event);
 }
 // listener suscrito en el arranque de la app (applications/app-service) consume el Flux
 // y ejecuta el "envío" de notificación (log estructurado) sin bloquear el hilo de la request HTTP
 ```
 
-Documentar en README: en producción, este `Sinks.Many` se reemplazaría por un publisher real hacia AWS SQS/SNS o EventBridge — el principio de desacople (responder rápido, notificar aparte) es el mismo.
+En producción, este `Sinks.Many` se reemplazaría por un publisher real hacia AWS SQS/SNS o EventBridge — el principio de desacople (responder rápido, notificar aparte) es el mismo.
 
-Resumen de la decisión para retomar US-007:
+Si queda tiempo dentro de la prueba técnica, se puede evolucionar la simulación en memoria hacia una cola local con LocalStack. La opción preferida sería SQS cuando se quiera demostrar cola durable, mensajes pendientes, retries y consumo explícito; SNS aplica mejor si se quiere demostrar fan-out/publicación a varios suscriptores. Para US-007 actual, SQS local sería la alternativa más cercana a "pedido recibido → mensaje encolado → listener lo consume".
+
+Resumen de la decisión US-007:
 
 - `OrderPlacedEvent` representa el hecho de dominio "pedido recibido/creado".
 - `Sinks.Many<OrderPlacedEvent>` funcionará como bus de eventos en memoria para la prueba técnica.
 - `OrderEventPublisher` publicará el evento después de persistir la orden.
 - `OrderEventListener` escuchará el flujo y simulará la notificación con log estructurado.
-- No se usará otro microservicio ni AWS real en esta prueba; en producción se reemplazaría por SQS/SNS/EventBridge con retries, durabilidad e idempotencia.
+- No se usará otro microservicio ni AWS real en el alcance base de esta prueba; si se extiende el alcance, LocalStack SQS sería el siguiente paso recomendado para visualizar mensajes encolados localmente.
 
 ---
 
@@ -617,7 +675,7 @@ Resumen de la decisión para retomar US-007:
 4. `infrastructure/entry-points/reactive-web` — handlers/routers funcionales de Usuarios y Productos
 5. `infrastructure/driven-adapters/redis` — cache write-through/read-through
 6. `domain/usecase` — `PlaceOrderUseCase` + `UpdateOrderStatusUseCase` (la pieza más compleja: concurrencia + async)
-7. `infrastructure/driven-adapters/notification-adapter` — mecanismo de eventos
+7. `infrastructure/driven-adapters/notification` — mecanismo de eventos
 8. Seguridad JWT
 9. Docker
 10. Testing (idealmente en paralelo a cada paso anterior, no todo al final)

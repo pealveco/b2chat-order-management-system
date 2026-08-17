@@ -47,7 +47,7 @@ public class ProductReactiveRepositoryAdapter extends ReactiveAdapterOperations<
     public Mono<Product> save(Product product) {
         return super.save(product)
                 .onErrorMap(DataAccessException.class,
-                        error -> new RepositoryUnavailableException("Product repository is temporarily unavailable"));
+                        error -> new RepositoryUnavailableException("Product repository is temporarily unavailable", error));
     }
 
     @Override
@@ -55,7 +55,7 @@ public class ProductReactiveRepositoryAdapter extends ReactiveAdapterOperations<
         return super.findById(id)
                 .filter(Product::getActive)
                 .onErrorMap(DataAccessException.class,
-                        error -> new RepositoryUnavailableException("Product repository is temporarily unavailable"));
+                        error -> new RepositoryUnavailableException("Product repository is temporarily unavailable", error));
     }
 
     @Override
@@ -63,6 +63,14 @@ public class ProductReactiveRepositoryAdapter extends ReactiveAdapterOperations<
         return repository.findByActiveTrue()
                 .map(this::toEntity)
                 .onErrorMap(DataAccessException.class,
-                        error -> new RepositoryUnavailableException("Product repository is temporarily unavailable"));
+                        error -> new RepositoryUnavailableException("Product repository is temporarily unavailable", error));
+    }
+
+    @Override
+    public Mono<Boolean> decrementStockIfAvailable(UUID productId, int quantity) {
+        return repository.decrementStockIfAvailable(productId, quantity)
+                .map(updatedRows -> updatedRows > 0)
+                .onErrorMap(DataAccessException.class,
+                        error -> new RepositoryUnavailableException("Product repository is temporarily unavailable", error));
     }
 }

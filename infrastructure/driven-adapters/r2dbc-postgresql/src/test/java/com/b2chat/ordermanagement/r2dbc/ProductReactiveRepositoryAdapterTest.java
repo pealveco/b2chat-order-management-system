@@ -148,4 +148,24 @@ class ProductReactiveRepositoryAdapterTest {
         StepVerifier.create(repositoryAdapter.findById(id))
                 .verifyComplete();
     }
+
+    @Test
+    void shouldDecrementStockWhenAvailable() {
+        var id = UUID.randomUUID();
+        when(repository.decrementStockIfAvailable(id, 2)).thenReturn(Mono.just(1));
+
+        StepVerifier.create(repositoryAdapter.decrementStockIfAvailable(id, 2))
+                .expectNext(true)
+                .verifyComplete();
+    }
+
+    @Test
+    void shouldReturnFalseWhenStockIsInsufficient() {
+        var id = UUID.randomUUID();
+        when(repository.decrementStockIfAvailable(id, 2)).thenReturn(Mono.just(0));
+
+        StepVerifier.create(repositoryAdapter.decrementStockIfAvailable(id, 2))
+                .expectNext(false)
+                .verifyComplete();
+    }
 }

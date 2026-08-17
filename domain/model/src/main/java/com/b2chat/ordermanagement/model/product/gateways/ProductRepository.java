@@ -10,4 +10,5 @@ public interface ProductRepository {
     Mono<Product> save(Product product);
     Mono<Product> findById(UUID id);
     Flux<Product> findAll();
+    Mono<Boolean> decrementStockIfAvailable(UUID productId, int quantity);
 }
