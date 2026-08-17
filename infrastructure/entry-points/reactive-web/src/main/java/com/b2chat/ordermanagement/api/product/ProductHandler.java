@@ -4,6 +4,7 @@ import com.b2chat.ordermanagement.api.exception.InvalidRequestException;
 import com.b2chat.ordermanagement.api.response.ApiResponse;
 import com.b2chat.ordermanagement.api.validation.RequestValidator;
 import com.b2chat.ordermanagement.usecase.createproduct.CreateProductUseCase;
+import com.b2chat.ordermanagement.usecase.deleteproduct.DeleteProductUseCase;
 import com.b2chat.ordermanagement.usecase.listproducts.ListProductsUseCase;
 import com.b2chat.ordermanagement.usecase.updateproduct.UpdateProductUseCase;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +24,7 @@ public class ProductHandler {
     private final CreateProductUseCase createProductUseCase;
     private final ListProductsUseCase listProductsUseCase;
     private final UpdateProductUseCase updateProductUseCase;
+    private final DeleteProductUseCase deleteProductUseCase;
     private final RequestValidator requestValidator;
 
     public Mono<ServerResponse> create(ServerRequest serverRequest) {
@@ -70,6 +72,12 @@ public class ProductHandler {
                 .flatMap(product -> ServerResponse.ok()
                         .contentType(MediaType.APPLICATION_JSON)
                         .bodyValue(ApiResponse.success(ProductResponse.from(product), serverRequest.path())));
+    }
+
+    public Mono<ServerResponse> delete(ServerRequest serverRequest) {
+        var id = parseProductId(serverRequest);
+        return deleteProductUseCase.execute(id)
+                .then(ServerResponse.noContent().build());
     }
 
     private UUID parseProductId(ServerRequest serverRequest) {

@@ -22,4 +22,9 @@ public class ProductData {
     private String description;
     private BigDecimal price;
     private Integer stock;
+    private Boolean active;
+
+    public ProductData(UUID id, String name, String description, BigDecimal price, Integer stock) {
+        this(id, name, description, price, stock, true);
+    }
 }

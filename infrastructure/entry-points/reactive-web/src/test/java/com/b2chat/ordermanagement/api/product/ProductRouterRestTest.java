@@ -7,6 +7,7 @@ import com.b2chat.ordermanagement.model.product.Product;
 import com.b2chat.ordermanagement.model.product.gateways.ProductCachePort;
 import com.b2chat.ordermanagement.model.product.gateways.ProductRepository;
 import com.b2chat.ordermanagement.usecase.createproduct.CreateProductUseCase;
+import com.b2chat.ordermanagement.usecase.deleteproduct.DeleteProductUseCase;
 import com.b2chat.ordermanagement.usecase.listproducts.ListProductsUseCase;
 import com.b2chat.ordermanagement.usecase.updateproduct.UpdateProductUseCase;
 import jakarta.validation.Validation;
@@ -41,9 +42,10 @@ class ProductRouterRestTest {
         var createProductUseCase = new CreateProductUseCase(productRepository, productCachePort);
         var listProductsUseCase = new ListProductsUseCase(productRepository, productCachePort);
         var updateProductUseCase = new UpdateProductUseCase(productRepository, productCachePort);
+        var deleteProductUseCase = new DeleteProductUseCase(productRepository, productCachePort);
         var validator = Validation.buildDefaultValidatorFactory().getValidator();
         var handler = new ProductHandler(createProductUseCase, listProductsUseCase,
-                updateProductUseCase, new RequestValidator(validator));
+                updateProductUseCase, deleteProductUseCase, new RequestValidator(validator));
         var router = new ProductRouterRest().productRoutes(handler);
         var handlerStrategies = HandlerStrategies.builder()
                 .exceptionHandler(new GlobalErrorWebExceptionHandler(new ObjectMapper()))
@@ -395,5 +397,83 @@ class ProductRouterRestTest {
         verify(productRepository).findById(id);
         verify(productRepository).save(any());
         verify(productCachePort, never()).put(any());
+    }
+
+    @Test
+    void shouldDeleteProduct() {
+        var id = new UUID(1L, 1L);
+        var product = new Product(id, "Keyboard", "Mechanical keyboard",
+                new com.b2chat.ordermanagement.model.money.Money(new BigDecimal("25.50")), 10);
+        when(productRepository.findById(id)).thenReturn(Mono.just(product));
+        when(productRepository.save(any())).thenAnswer(invocation -> Mono.just(invocation.getArgument(0, Product.class)));
+        when(productCachePort.evict(id)).thenReturn(Mono.empty());
+
+        webTestClient.delete()
+                .uri("/products/{id}", id)
+                .exchange()
+                .expectStatus().isNoContent()
+                .expectBody().isEmpty();
+
+        verify(productRepository).findById(id);
+        verify(productRepository).save(Mockito.argThat(saved -> !saved.getActive()));
+        verify(productCachePort).evict(id);
+    }
+
+    @Test
+    void shouldReturnNotFoundWhenDeletingMissingProduct() {
+        var id = new UUID(1L, 1L);
+        when(productRepository.findById(id)).thenReturn(Mono.empty());
+
+        webTestClient.delete()
+                .uri("/products/{id}", id)
+                .exchange()
+                .expectStatus().isNotFound()
+                .expectBody()
+                .jsonPath("$.error.code").isEqualTo("PRODUCT_NOT_FOUND")
+                .jsonPath("$.error.message").isEqualTo("Product with id " + id + " was not found")
+                .jsonPath("$.error.status").isEqualTo(404);
+
+        verify(productRepository).findById(id);
+        verify(productRepository, never()).save(any());
+        verify(productCachePort, never()).evict(any());
+    }
+
+    @Test
+    void shouldReturnBadRequestWhenDeletingProductIdIsInvalid() {
+        webTestClient.delete()
+                .uri("/products/not-a-uuid")
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.error.code").isEqualTo("INVALID_REQUEST")
+                .jsonPath("$.error.message").isEqualTo("Path variable id must be a valid UUID")
+                .jsonPath("$.error.status").isEqualTo(400);
+
+        verify(productRepository, never()).findById(any());
+        verify(productRepository, never()).save(any());
+        verify(productCachePort, never()).evict(any());
+    }
+
+    @Test
+    void shouldNotEvictCacheWhenDeletePersistenceFails() {
+        var id = new UUID(1L, 1L);
+        var product = new Product(id, "Keyboard", "Mechanical keyboard",
+                new com.b2chat.ordermanagement.model.money.Money(new BigDecimal("25.50")), 10);
+        when(productRepository.findById(id)).thenReturn(Mono.just(product));
+        when(productRepository.save(any()))
+                .thenReturn(Mono.error(new RepositoryUnavailableException(
+                        "Product repository is temporarily unavailable")));
+
+        webTestClient.delete()
+                .uri("/products/{id}", id)
+                .exchange()
+                .expectStatus().isEqualTo(503)
+                .expectBody()
+                .jsonPath("$.error.code").isEqualTo("SERVICE_UNAVAILABLE")
+                .jsonPath("$.error.message").isEqualTo("Product repository is temporarily unavailable");
+
+        verify(productRepository).findById(id);
+        verify(productRepository).save(any());
+        verify(productCachePort, never()).evict(any());
     }
 }

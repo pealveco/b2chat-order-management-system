@@ -85,7 +85,7 @@ Backlog completo de historias de usuario y criterios de aceptación en [`docs/BA
 | `POST` | `/products` | Registrar un nuevo producto *(implementado)* |
 | `GET` | `/products` | Listar catálogo de productos *(implementado)* |
 | `PUT` | `/products/{id}` | Actualizar un producto *(implementado)* |
-| `DELETE` | `/products/{id}` | Eliminar un producto (soft delete) *(planeado)* |
+| `DELETE` | `/products/{id}` | Eliminar un producto (soft delete) *(implementado)* |
 
 ### Orders
 | Método | Endpoint | Descripción |
@@ -121,7 +121,7 @@ WHERE id = :productId AND stock >= :quantity;
 Si el número de filas afectadas es 0, se interpreta como stock insuficiente y la operación se aborta.
 
 ### Estrategia de caché
-Actualmente se implementa **write-through** para productos: toda creación o actualización de producto persiste primero en Postgres y, si la persistencia confirma, escribe el producto en Redis con la clave `product:{id}` y registra el id en el set `products:all`.
+Actualmente se implementa **write-through** para productos: toda creación o actualización de producto persiste primero en Postgres y, si la persistencia confirma, escribe el producto en Redis con la clave `product:{id}` y registra el id en el set `products:all`. La eliminación usa soft delete en Postgres (`active=false`) y luego elimina la clave individual de Redis y remueve el id del set `products:all`.
 
 La consulta de catálogo (`GET /products`) implementa **read-through fallback**: primero intenta reconstruir la lista desde Redis usando `products:all`; ante un miss real — cache frío en el arranque, entrada incompleta, TTL expirado o evicción — lee desde Postgres, responde al cliente y repuebla Redis para futuras lecturas.
 
@@ -136,11 +136,11 @@ Este proyecto se desarrolló usando **Claude Code** bajo un enfoque de Spec-Driv
 
 Decisiones de alcance no especificadas explícitamente en el enunciado de la prueba técnica:
 
-1. **Caching:** write-through implementado para creación/actualización de producto y read-through fallback implementado para catálogo. TTL con jitter y job de refresh-ahead quedan documentados como evolución productiva.
+1. **Caching:** write-through implementado para creación/actualización/eliminación de producto y read-through fallback implementado para catálogo. TTL con jitter y job de refresh-ahead quedan documentados como evolución productiva.
 2. **Notificaciones:** simuladas en memoria con un patrón productor/consumidor reactivo, representando el mismo principio de desacople que se usaría en producción con AWS SQS/SNS o EventBridge.
 3. **Eliminación de productos:** soft delete (`active=false`) en lugar de DELETE físico, para preservar integridad referencial con pedidos históricos.
 4. **Cancelación de pedidos:** al cancelar un pedido, se repone automáticamente el stock descontado.
-5. **Autenticación JWT:** endpoint simplificado de emisión de token basado en `userId`/`email` existente, sin flujo completo de credenciales/password, dado que el enunciado no lo especifica. Solo los endpoints de escritura (`POST`/`PUT`/`DELETE`) están protegidos; los `GET` son públicos.
+5. **Autenticación JWT:** endpoint simplificado de emisión de token basado en `userId`/`email` existente, sin flujo completo de credenciales/password, dado que el enunciado no lo especifica. Los endpoints de escritura quedarán protegidos cuando se implemente autenticación/roles; por ahora las escrituras de productos están públicas temporalmente para probar las HUs.
 6. **Concurrencia en stock:** UPDATE condicional atómico a nivel de base de datos, no lectura-luego-escritura en código.
 
 ---

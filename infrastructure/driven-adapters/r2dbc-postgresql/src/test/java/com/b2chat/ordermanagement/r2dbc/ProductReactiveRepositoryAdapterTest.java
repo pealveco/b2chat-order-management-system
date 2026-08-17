@@ -68,7 +68,7 @@ class ProductReactiveRepositoryAdapterTest {
     @Test
     void shouldFindAllProducts() {
         var id = UUID.randomUUID();
-        when(repository.findAll()).thenReturn(Flux.just(new ProductData(
+        when(repository.findByActiveTrue()).thenReturn(Flux.just(new ProductData(
                 id,
                 "Keyboard",
                 "Mechanical keyboard",
@@ -125,11 +125,27 @@ class ProductReactiveRepositoryAdapterTest {
 
     @Test
     void shouldMapPersistenceFailuresWhenFindingAllProducts() {
-        when(repository.findAll())
+        when(repository.findByActiveTrue())
                 .thenReturn(Flux.error(new DataAccessResourceFailureException("connection failed")));
 
         StepVerifier.create(repositoryAdapter.findAll())
                 .expectError(RepositoryUnavailableException.class)
                 .verify();
+    }
+
+    @Test
+    void shouldFilterInactiveProductWhenFindingById() {
+        var id = UUID.randomUUID();
+        when(repository.findById(id)).thenReturn(Mono.just(new ProductData(
+                id,
+                "Keyboard",
+                "Mechanical keyboard",
+                new BigDecimal("25.50"),
+                10,
+                false
+        )));
+
+        StepVerifier.create(repositoryAdapter.findById(id))
+                .verifyComplete();
     }
 }

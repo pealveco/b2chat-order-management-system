@@ -14,17 +14,27 @@ public final class Product {
     private final String description;
     private final Money price;
     private final Integer stock;
+    private final Boolean active;
 
     public Product(UUID id, String name, String description, Money price, Integer stock) {
+        this(id, name, description, price, stock, true);
+    }
+
+    public Product(UUID id, String name, String description, Money price, Integer stock, Boolean active) {
         this.id = id;
         this.name = requireText(name, "name");
         this.description = description == null ? "" : description.trim();
         this.price = requirePrice(price);
         this.stock = validateStock(stock);
+        this.active = active == null || active;
     }
 
     public static Product create(String name, String description, Money price, Integer stock) {
         return new Product(null, name, description, price, stock);
+    }
+
+    public Product deactivate() {
+        return new Product(id, name, description, price, stock, false);
     }
 
     private static String requireText(String value, String field) {

@@ -26,7 +26,8 @@ public class ProductReactiveRepositoryAdapter extends ReactiveAdapterOperations<
                 data.getName(),
                 data.getDescription(),
                 new Money(data.getPrice()),
-                data.getStock()
+                data.getStock(),
+                data.getActive()
         ));
     }
 
@@ -37,7 +38,8 @@ public class ProductReactiveRepositoryAdapter extends ReactiveAdapterOperations<
                 product.getName(),
                 product.getDescription(),
                 product.getPrice().getAmount(),
-                product.getStock()
+                product.getStock(),
+                product.getActive()
         );
     }
 
@@ -51,13 +53,15 @@ public class ProductReactiveRepositoryAdapter extends ReactiveAdapterOperations<
     @Override
     public Mono<Product> findById(UUID id) {
         return super.findById(id)
+                .filter(Product::getActive)
                 .onErrorMap(DataAccessException.class,
                         error -> new RepositoryUnavailableException("Product repository is temporarily unavailable"));
     }
 
     @Override
     public Flux<Product> findAll() {
-        return super.findAll()
+        return repository.findByActiveTrue()
+                .map(this::toEntity)
                 .onErrorMap(DataAccessException.class,
                         error -> new RepositoryUnavailableException("Product repository is temporarily unavailable"));
     }

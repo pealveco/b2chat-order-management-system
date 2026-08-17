@@ -61,7 +61,7 @@ public class Product {
     private String description;
     private Money price;      // value object, valida > 0
     private Integer stock;    // valida >= 0
-    // active se agregará cuando se implemente soft delete/listado de catálogo
+    private Boolean active;   // soft delete: false lo retira del catálogo
 }
 
 // Order.java
@@ -126,10 +126,9 @@ public interface UserRepository {
 
 public interface ProductRepository {
     Mono<Product> save(Product product);
-    Mono<Product> findById(UUID id);
-    Flux<Product> findAll();
+    Mono<Product> findById(UUID id); // solo productos activos para operaciones de catálogo
+    Flux<Product> findAll();         // solo productos activos
     // Los siguientes métodos se agregan cuando las HUs los necesiten:
-    Mono<Void> deleteById(UUID id); // soft delete: update active=false
     Mono<Long> decrementStockIfAvailable(UUID productId, int quantity);
     // ^ UPDATE condicional atómico: WHERE id=? AND stock >= ? -> retorna filas afectadas
     Mono<Void> incrementStock(UUID productId, int quantity); // usado en cancelación
@@ -145,11 +144,11 @@ public interface OrderRepository {
 // Puerto de cache
 public interface ProductCachePort {
     Mono<Void> put(Product product);          // write-through
-    // Los siguientes métodos se agregan cuando las HUs los necesiten:
-    Mono<Product> get(UUID productId);
-    Mono<Void> evict(UUID productId);          // usado en soft delete
+    Mono<Void> evict(UUID productId);         // borra product:{id} y remueve products:all
     Flux<Product> getAll();
     Mono<Void> putAll(List<Product> products); // repoblado read-through
+    // Los siguientes métodos se agregan cuando las HUs los necesiten:
+    Mono<Product> get(UUID productId);
 }
 
 // Puerto de eventos/notificación
@@ -365,6 +364,8 @@ US-005 usa write-through secuencial dentro de `UpdateProductUseCase`: valida que
 
 **`DELETE /products/{id}`** → `204`, `404` si no existe.
 
+US-006 usa soft delete por regla de negocio: no elimina físicamente el registro para preservar integridad referencial con pedidos históricos futuros (`order_items`). `DeleteProductUseCase` busca el producto activo, guarda `active=false` en Postgres y solo después ejecuta `ProductCachePort.evict(id)`, que borra `product:{id}` y remueve el id de `products:all`. Si Postgres falla, Redis no se toca. Si Redis falla después de confirmar Postgres, la API responde `503 Service Unavailable` con el envelope estándar.
+
 ### 6.3 Orders
 
 **`POST /orders`**
@@ -401,7 +402,7 @@ US-005 usa write-through secuencial dentro de `UpdateProductUseCase`: valida que
 { "token": "eyJhbGciOi..." }
 ```
 
-Endpoints protegidos (requieren `Authorization: Bearer {token}`): operaciones de escritura operativas (`POST`, `PUT`, `DELETE`) según alcance de cada HU. `POST /users` queda público para registro. `POST /products` y `PUT /products/{id}` quedan temporalmente públicos durante US-003/US-005 porque aún no existe HU de autenticación/roles de administrador. Los `GET` quedan abiertos salvo que una HU indique lo contrario.
+Endpoints protegidos (requieren `Authorization: Bearer {token}`): operaciones de escritura operativas (`POST`, `PUT`, `DELETE`) según alcance de cada HU. `POST /users` queda público para registro. `POST /products`, `PUT /products/{id}` y `DELETE /products/{id}` quedan temporalmente públicos durante US-003/US-005/US-006 porque aún no existe HU de autenticación/roles de administrador. Los `GET` quedan abiertos salvo que una HU indique lo contrario.
 
 ---
 
@@ -585,7 +586,7 @@ Resumen de la decisión para retomar US-007:
 - Librería: `io.jsonwebtoken:jjwt-api` + `jjwt-impl` + `jjwt-jackson`.
 - `SecurityWebFilterChain` (Spring Security Reactive) protegiendo operaciones de escritura según alcance de cada HU.
 - `POST /users` queda público para permitir registro de usuarios.
-- `POST /products` y `PUT /products/{id}` quedan públicos temporalmente hasta implementar autenticación/roles de administrador.
+- `POST /products`, `PUT /products/{id}` y `DELETE /products/{id}` quedan públicos temporalmente hasta implementar autenticación/roles de administrador.
 - Regla general futura: proteger `POST`, `PUT`, `DELETE` operativos; `GET` públicos salvo que una HU indique lo contrario.
 - Secret de firma vía variable de entorno (`JWT_SECRET`), nunca hardcoded — coherente con buenas prácticas ya aplicadas en tu experiencia (Cognito/OAuth2 en AB InBev).
 

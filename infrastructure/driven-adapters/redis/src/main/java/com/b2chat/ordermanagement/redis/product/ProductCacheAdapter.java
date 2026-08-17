@@ -15,6 +15,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
+import java.util.UUID;
 
 @Repository
 public class ProductCacheAdapter extends ReactiveTemplateAdapterOperations<Product, ProductCacheData>
@@ -29,15 +30,28 @@ public class ProductCacheAdapter extends ReactiveTemplateAdapterOperations<Produ
                 data.getName(),
                 data.getDescription(),
                 new Money(data.getPrice()),
-                data.getStock()
+                data.getStock(),
+                data.getActive()
         ));
         this.stringTemplate = new ReactiveRedisTemplate<>(connectionFactory, RedisSerializationContext.string());
     }
 
     @Override
     public Mono<Void> put(Product product) {
+        if (!product.getActive()) {
+            return evict(product.getId());
+        }
         return saveProduct(product)
                 .then(indexProduct(product))
+                .then()
+                .onErrorMap(DataAccessException.class,
+                error -> new RepositoryUnavailableException("Product cache is temporarily unavailable"));
+    }
+
+    @Override
+    public Mono<Void> evict(UUID productId) {
+        return deleteProduct(productId)
+                .then(unindexProduct(productId))
                 .then()
                 .onErrorMap(DataAccessException.class,
                         error -> new RepositoryUnavailableException("Product cache is temporarily unavailable"));
@@ -66,7 +80,8 @@ public class ProductCacheAdapter extends ReactiveTemplateAdapterOperations<Produ
                 product.getName(),
                 product.getDescription(),
                 product.getPrice().getAmount(),
-                product.getStock()
+                product.getStock(),
+                product.getActive()
         );
     }
 
@@ -77,6 +92,7 @@ public class ProductCacheAdapter extends ReactiveTemplateAdapterOperations<Produ
 
         return Flux.fromIterable(productIds)
                 .flatMap(this::findCachedProduct)
+                .filter(Product::getActive)
                 .collectList()
                 .flatMapMany(products -> products.size() == productIds.size()
                         ? Flux.fromIterable(products)
@@ -87,8 +103,16 @@ public class ProductCacheAdapter extends ReactiveTemplateAdapterOperations<Produ
         return save(productKey(product.getId().toString()), product);
     }
 
+    protected Mono<Long> deleteProduct(UUID productId) {
+        return deleteById(productKey(productId.toString()));
+    }
+
     protected Mono<Long> indexProduct(Product product) {
         return stringTemplate.opsForSet().add(PRODUCTS_ALL_KEY, product.getId().toString());
+    }
+
+    protected Mono<Long> unindexProduct(UUID productId) {
+        return stringTemplate.opsForSet().remove(PRODUCTS_ALL_KEY, productId.toString());
     }
 
     protected Flux<String> findCachedProductIds() {

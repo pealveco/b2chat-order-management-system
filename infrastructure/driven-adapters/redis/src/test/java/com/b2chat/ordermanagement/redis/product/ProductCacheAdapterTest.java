@@ -43,6 +43,21 @@ class ProductCacheAdapterTest {
     }
 
     @Test
+    void shouldEvictProductWhenWritingInactiveProduct() {
+        var id = UUID.randomUUID();
+        var product = new Product(id, "Keyboard", "Mechanical keyboard",
+                new Money(new BigDecimal("25.50")), 10, false);
+        var adapter = spy(new ProductCacheAdapter(connectionFactory, objectMapper));
+
+        doReturn(Mono.empty()).when(adapter).evict(id);
+
+        StepVerifier.create(adapter.put(product))
+                .verifyComplete();
+
+        verify(adapter).evict(id);
+    }
+
+    @Test
     void shouldMapCacheFailuresWhenWritingProduct() {
         var id = UUID.randomUUID();
         var product = new Product(id, "Keyboard", "Mechanical keyboard",
@@ -53,6 +68,34 @@ class ProductCacheAdapterTest {
                 .when(adapter).saveProduct(same(product));
 
         StepVerifier.create(adapter.put(product))
+                .expectError(RepositoryUnavailableException.class)
+                .verify();
+    }
+
+    @Test
+    void shouldEvictProductWithExpectedKeys() {
+        var id = UUID.randomUUID();
+        var adapter = spy(new ProductCacheAdapter(connectionFactory, objectMapper));
+
+        doReturn(Mono.just(1L)).when(adapter).deleteProduct(id);
+        doReturn(Mono.just(1L)).when(adapter).unindexProduct(id);
+
+        StepVerifier.create(adapter.evict(id))
+                .verifyComplete();
+
+        verify(adapter).deleteProduct(id);
+        verify(adapter).unindexProduct(id);
+    }
+
+    @Test
+    void shouldMapCacheFailuresWhenEvictingProduct() {
+        var id = UUID.randomUUID();
+        var adapter = spy(new ProductCacheAdapter(connectionFactory, objectMapper));
+
+        doReturn(Mono.error(new DataAccessResourceFailureException("redis unavailable")))
+                .when(adapter).deleteProduct(id);
+
+        StepVerifier.create(adapter.evict(id))
                 .expectError(RepositoryUnavailableException.class)
                 .verify();
     }
@@ -91,6 +134,21 @@ class ProductCacheAdapterTest {
         doReturn(reactor.core.publisher.Flux.fromIterable(List.of(id.toString())))
                 .when(adapter).findCachedProductIds();
         doReturn(Mono.empty()).when(adapter).findCachedProduct(eq(id.toString()));
+
+        StepVerifier.create(adapter.getAll())
+                .verifyComplete();
+    }
+
+    @Test
+    void shouldReturnEmptyWhenCacheIndexHasInactiveProductEntries() {
+        var id = UUID.randomUUID();
+        var product = new Product(id, "Keyboard", "Mechanical keyboard",
+                new Money(new BigDecimal("25.50")), 10, false);
+        var adapter = spy(new ProductCacheAdapter(connectionFactory, objectMapper));
+
+        doReturn(reactor.core.publisher.Flux.fromIterable(List.of(id.toString())))
+                .when(adapter).findCachedProductIds();
+        doReturn(Mono.just(product)).when(adapter).findCachedProduct(eq(id.toString()));
 
         StepVerifier.create(adapter.getAll())
                 .verifyComplete();

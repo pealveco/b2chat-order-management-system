@@ -15,8 +15,11 @@ CREATE TABLE IF NOT EXISTS products (
     name VARCHAR(255) NOT NULL,
     description TEXT,
     price NUMERIC(12, 2) NOT NULL CHECK (price > 0),
-    stock INTEGER NOT NULL CHECK (stock >= 0)
+    stock INTEGER NOT NULL CHECK (stock >= 0),
+    active BOOLEAN NOT NULL DEFAULT TRUE
 );
+
+ALTER TABLE products ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;
 
 -- Seed data
 
