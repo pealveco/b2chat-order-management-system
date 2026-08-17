@@ -848,7 +848,11 @@ Healthchecks:
 
 - `postgres`: `pg_isready` contra `${POSTGRES_DB}` y `${POSTGRES_USER}`.
 - `redis`: `redis-cli ping`.
-- `app`: depende de `postgres` y `redis` con `condition: service_healthy`, evitando arrancar antes de que las dependencias estén disponibles.
+- `app`: depende de `postgres` y `redis` con `condition: service_healthy`, evitando arrancar antes de que las dependencias estén disponibles; además expone healthcheck HTTP sobre `/actuator/health`.
+
+Tolerancia de arranque:
+
+- `app` usa `restart: on-failure:3` para recuperarse de fallos transitorios de inicialización, especialmente en el primer arranque después de `docker compose down -v`, cuando Postgres crea el volumen y reinicia internamente su servidor.
 
 Variables relevantes:
 
@@ -862,7 +866,7 @@ Variables relevantes:
 
 El `Dockerfile` es multi-stage:
 
-- Stage `builder`: `eclipse-temurin:21-jdk-alpine`, ejecuta Gradle para generar el `bootJar`.
+- Stage `builder`: `eclipse-temurin:21-jdk-alpine`, copia primero los scripts de Gradle y `build.gradle` de los módulos para aprovechar cache de capas en la resolución de dependencias; luego copia el código y genera el `bootJar`.
 - Stage final: `eclipse-temurin:21-jre-alpine`, copia solo el JAR ejecutable, usa usuario no root y expone puerto `8080`.
 
 Nota: el build de la imagen genera el artefacto ejecutable. La ejecución completa de tests y PIT se valida fuera del Docker build con Gradle, porque parte de los tests de integración usan Testcontainers/Docker y no deben depender del entorno interno del build de imagen.

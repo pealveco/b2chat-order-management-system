@@ -45,7 +45,9 @@ Este comando crea y levanta:
 - `postgres`: PostgreSQL 16, expuesto en `localhost:5432`, con volumen persistente `postgres_data`.
 - `redis`: Redis 7, expuesto en `localhost:6379`.
 
-`app` depende de los healthchecks de `postgres` y `redis`, por lo que no intenta arrancar hasta que ambos servicios estén disponibles. La app se conecta a esos servicios por variables de entorno:
+`app` depende de los healthchecks de `postgres` y `redis`, por lo que no intenta arrancar hasta que ambos servicios estén disponibles. Además, el contenedor de la app tiene healthcheck propio sobre `/actuator/health` y política `restart: on-failure:3` para tolerar fallos transitorios durante el primer arranque con volumen limpio.
+
+La app se conecta a esos servicios por variables de entorno:
 
 | Variable | Uso en Docker Compose |
 |---|---|
