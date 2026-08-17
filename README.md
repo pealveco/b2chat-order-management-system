@@ -73,31 +73,31 @@ Backlog completo de historias de usuario y criterios de aceptación en [`docs/BA
 ## API — Endpoints
 
 ### Users
-| Método | Endpoint | Descripción |
-|---|---|---|
-| `POST` | `/users` | Registrar un nuevo usuario *(implementado)* |
-| `GET` | `/users/{id}` | Obtener detalles de un usuario *(implementado)* |
-| `GET` | `/users/{id}/orders` | Listar pedidos de un usuario *(implementado / bonus)* |
+| Método | Endpoint | Auth | Descripción |
+|---|---|---|---|
+| `POST` | `/users` | Público | Registrar un nuevo usuario *(implementado)* |
+| `GET` | `/users/{id}` | Público | Obtener detalles de un usuario *(implementado)* |
+| `GET` | `/users/{id}/orders` | Público | Listar pedidos de un usuario *(implementado / bonus)* |
 
 ### Products
-| Método | Endpoint | Descripción |
-|---|---|---|
-| `POST` | `/products` | Registrar un nuevo producto *(implementado)* |
-| `GET` | `/products` | Listar catálogo de productos *(implementado)* |
-| `PUT` | `/products/{id}` | Actualizar un producto *(implementado)* |
-| `DELETE` | `/products/{id}` | Eliminar un producto (soft delete) *(implementado)* |
+| Método | Endpoint | Auth | Descripción |
+|---|---|---|---|
+| `POST` | `/products` | Bearer JWT | Registrar un nuevo producto *(implementado)* |
+| `GET` | `/products` | Público | Listar catálogo de productos *(implementado)* |
+| `PUT` | `/products/{id}` | Bearer JWT | Actualizar un producto *(implementado)* |
+| `DELETE` | `/products/{id}` | Bearer JWT | Eliminar un producto (soft delete) *(implementado)* |
 
 ### Orders
-| Método | Endpoint | Descripción |
-|---|---|---|
-| `POST` | `/orders` | Crear un pedido (persistencia transaccional + notificación asíncrona) *(implementado)* |
-| `GET` | `/orders/{id}` | Obtener detalle de un pedido *(implementado)* |
-| `PUT` | `/orders/{id}/status` | Actualizar estado de un pedido *(implementado)* |
+| Método | Endpoint | Auth | Descripción |
+|---|---|---|---|
+| `POST` | `/orders` | Bearer JWT | Crear un pedido (persistencia transaccional + notificación asíncrona) *(implementado)* |
+| `GET` | `/orders/{id}` | Público | Obtener detalle de un pedido *(implementado)* |
+| `PUT` | `/orders/{id}/status` | Bearer JWT | Actualizar estado de un pedido *(implementado)* |
 
 ### Auth *(bonus)*
-| Método | Endpoint | Descripción |
-|---|---|---|
-| `POST` | `/auth/token` | Emitir token JWT *(planeado / bonus)* |
+| Método | Endpoint | Auth | Descripción |
+|---|---|---|---|
+| `POST` | `/auth/token` | Público | Emitir token JWT *(implementado / bonus)* |
 
 > Ejemplos completos de request/response en [`SPEC.md`](./SPEC.md#6-contratos-de-api).
 
@@ -146,7 +146,7 @@ Decisiones de alcance no especificadas explícitamente en el enunciado de la pru
 2. **Notificaciones:** simuladas en memoria con un patrón productor/consumidor reactivo, representando el mismo principio de desacople que se usaría en producción con AWS SQS/SNS o EventBridge.
 3. **Eliminación de productos:** soft delete (`active=false`) en lugar de DELETE físico, para preservar integridad referencial con pedidos históricos.
 4. **Cancelación de pedidos:** al cancelar un pedido, se repone automáticamente el stock descontado.
-5. **Autenticación JWT:** endpoint simplificado de emisión de token basado en `userId`/`email` existente, sin flujo completo de credenciales/password, dado que el enunciado no lo especifica. Los endpoints de escritura quedarán protegidos cuando se implemente autenticación/roles; por ahora las escrituras de productos están públicas temporalmente para probar las HUs.
+5. **Autenticación JWT:** endpoint simplificado de emisión de token basado en `userId`/`email` existente, sin flujo completo de credenciales/password, dado que el enunciado no lo especifica. Los endpoints de escritura (`POST`, `PUT`, `DELETE`) quedan protegidos con `Authorization: Bearer {token}`; `POST /users`, `POST /auth/token` y los `GET` quedan públicos por alcance de la prueba.
 6. **Concurrencia en stock:** UPDATE condicional atómico a nivel de base de datos, no lectura-luego-escritura en código.
 7. **Consistencia de cache en pedidos:** al crear o cancelar pedidos se refresca cache de productos afectados después de confirmar Postgres; no se intenta actualizar Redis dentro de la transacción de base de datos.
 8. **Historial de pedidos:** `GET /users/{id}/orders` se implementa sin paginación por alcance de la prueba. En producción debería evolucionar a paginación por cursor o `page/size` con orden estable por `createdAt`.

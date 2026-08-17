@@ -11,5 +11,7 @@ public interface UserRepository {
 
     Mono<User> findById(UUID id);
 
+    Mono<User> findByEmail(Email email);
+
     Mono<Boolean> existsByEmail(Email email);
 }

@@ -8,4 +8,6 @@ import java.util.UUID;
 
 public interface UserReactiveRepository extends ReactiveCrudRepository<UserData, UUID>, ReactiveQueryByExampleExecutor<UserData> {
     Mono<Boolean> existsByEmail(String email);
+
+    Mono<UserData> findByEmail(String email);
 }

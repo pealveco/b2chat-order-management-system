@@ -66,6 +66,34 @@ class UserReactiveRepositoryAdapterTest {
     }
 
     @Test
+    void shouldFindUserByEmail() {
+        var id = UUID.randomUUID();
+        when(repository.findByEmail("juan@example.com")).thenReturn(Mono.just(new UserData(
+                id,
+                "juan@example.com",
+                "Juan Perez",
+                "Cra 10"
+        )));
+
+        StepVerifier.create(repositoryAdapter.findByEmail(new Email("juan@example.com")))
+                .expectNextMatches(user -> user.getId().equals(id)
+                        && user.getEmail().getValue().equals("juan@example.com")
+                        && user.getName().equals("Juan Perez")
+                        && user.getAddress().equals("Cra 10"))
+                .verifyComplete();
+    }
+
+    @Test
+    void shouldMapPersistenceFailuresWhenFindingUserByEmail() {
+        when(repository.findByEmail("juan@example.com"))
+                .thenReturn(Mono.error(new DataAccessResourceFailureException("connection failed")));
+
+        StepVerifier.create(repositoryAdapter.findByEmail(new Email("juan@example.com")))
+                .expectError(RepositoryUnavailableException.class)
+                .verify();
+    }
+
+    @Test
     void shouldSaveUser() {
         var id = UUID.randomUUID();
         var user = User.create(new Email("juan@example.com"), "Juan Perez", "Cra 10");

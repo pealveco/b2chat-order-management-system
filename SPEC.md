@@ -554,11 +554,46 @@ No se implementa paginación por alcance de la prueba. Evolución recomendada: p
 // Request
 { "userId": "uuid" }
 // Response 200
-{ "token": "eyJhbGciOi..." }
+{
+  "data": {
+    "token": "eyJhbGciOi...",
+    "tokenType": "Bearer",
+    "expiresInSeconds": 3600
+  },
+  "meta": { "path": "/auth/token", "timestamp": "2026-08-17T12:00:00Z" }
+}
 ```
 
-Endpoints protegidos (requieren `Authorization: Bearer {token}`): operaciones de escritura operativas (`POST`, `PUT`, `DELETE`) según alcance de cada HU. `POST /users` queda público para registro. `POST /products`, `PUT /products/{id}` y `DELETE /products/{id}` quedan temporalmente públicos durante US-003/US-005/US-006 porque aún no existe HU de autenticación/roles de administrador. Los `GET` quedan abiertos salvo que una HU indique lo contrario.
-`POST /orders` y `PUT /orders/{id}/status` quedan temporalmente públicos durante las HUs de pedidos para facilitar la prueba funcional sin flujo de autenticación/roles aún implementado.
+También se acepta request por email:
+
+```json
+{ "email": "demo.user@example.com" }
+```
+
+Reglas:
+
+- El request debe incluir exactamente un identificador: `userId` o `email`.
+- `userId` inexistente o `email` inexistente retorna `404 Not Found`.
+- `email` con formato inválido retorna `400 Bad Request`.
+- Token emitido con firma local `HS256`, `sub=userId`, claims `userId`, `email`, `azp` y `roles`.
+
+Endpoints protegidos (requieren `Authorization: Bearer {token}`): operaciones de escritura operativas (`POST`, `PUT`, `DELETE`). `POST /users` queda público para registro. `POST /auth/token` queda público para emisión del token simplificado. Los `GET` quedan abiertos salvo que una HU indique lo contrario.
+
+Matriz de autenticación actual:
+
+| Endpoint | Auth |
+|---|---|
+| `POST /users` | Público |
+| `GET /users/{id}` | Público |
+| `GET /users/{id}/orders` | Público |
+| `POST /products` | Bearer JWT |
+| `GET /products` | Público |
+| `PUT /products/{id}` | Bearer JWT |
+| `DELETE /products/{id}` | Bearer JWT |
+| `POST /orders` | Bearer JWT |
+| `GET /orders/{id}` | Público |
+| `PUT /orders/{id}/status` | Bearer JWT |
+| `POST /auth/token` | Público |
 
 ---
 
@@ -760,12 +795,15 @@ Resumen de la decisión US-007:
 
 ## 10. Seguridad (JWT)
 
-- Librería: `io.jsonwebtoken:jjwt-api` + `jjwt-impl` + `jjwt-jackson`.
-- `SecurityWebFilterChain` (Spring Security Reactive) protegiendo operaciones de escritura según alcance de cada HU.
+- Implementación: Spring Security Reactive OAuth2 Resource Server + Nimbus (`JwtEncoder` / `NimbusReactiveJwtDecoder`) con firma simétrica `HS256`.
+- `SecurityWebFilterChain` protegiendo operaciones de escritura (`POST`, `PUT`, `DELETE`) según alcance de US-012.
 - `POST /users` queda público para permitir registro de usuarios.
-- `POST /products`, `PUT /products/{id}` y `DELETE /products/{id}` quedan públicos temporalmente hasta implementar autenticación/roles de administrador.
-- Regla general futura: proteger `POST`, `PUT`, `DELETE` operativos; `GET` públicos salvo que una HU indique lo contrario.
+- `POST /auth/token` queda público para emitir el JWT simplificado.
+- Los `GET` quedan públicos salvo que una HU indique lo contrario.
+- Escrituras sin token o con token inválido retornan `401 Unauthorized` con el envelope estándar de error.
 - Secret de firma vía variable de entorno (`JWT_SECRET`), nunca hardcoded — coherente con buenas prácticas ya aplicadas en tu experiencia (Cognito/OAuth2 en AB InBev).
+- `JWT_SECRET` debe tener mínimo 32 bytes para cumplir con `HS256`.
+- El enunciado no define password ni credenciales; por alcance, se valida que el usuario exista por `userId` o `email` y se emite token. En producción esto debería reemplazarse por un flujo de autenticación real o IdP externo.
 
 ---
 

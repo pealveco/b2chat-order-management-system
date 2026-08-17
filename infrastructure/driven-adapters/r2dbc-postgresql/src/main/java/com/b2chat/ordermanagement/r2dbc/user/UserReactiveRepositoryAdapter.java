@@ -57,6 +57,14 @@ public class UserReactiveRepositoryAdapter extends ReactiveAdapterOperations<
     }
 
     @Override
+    public Mono<User> findByEmail(Email email) {
+        return repository.findByEmail(email.getValue())
+                .map(this::toEntity)
+                .onErrorMap(DataAccessException.class,
+                        error -> new RepositoryUnavailableException("Persistence repository is temporarily unavailable"));
+    }
+
+    @Override
     public Mono<User> findById(UUID id) {
         return super.findById(id)
                 .onErrorMap(DataAccessException.class,
