@@ -44,6 +44,15 @@ public class OrderReactiveRepositoryAdapter implements OrderRepository {
     }
 
     @Override
+    public Flux<Order> findByUserId(UUID userId) {
+        return orderRepository.findByUserIdOrderByCreatedAtDesc(userId)
+                .flatMap(orderData -> findItems(orderData.getId())
+                        .map(items -> toOrder(orderData, items)))
+                .onErrorMap(DataAccessException.class,
+                        error -> new RepositoryUnavailableException("Order repository is temporarily unavailable", error));
+    }
+
+    @Override
     public Mono<Order> updateStatus(Order order) {
         return orderRepository.updateStatus(order.getId(), order.getStatus().name())
                 .thenReturn(order)

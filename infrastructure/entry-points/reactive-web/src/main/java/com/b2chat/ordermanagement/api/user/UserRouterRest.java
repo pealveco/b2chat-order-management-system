@@ -14,6 +14,7 @@ public class UserRouterRest {
     @Bean
     public RouterFunction<ServerResponse> userRoutes(UserHandler handler) {
         return route(POST("/users"), handler::register)
+                .andRoute(GET("/users/{id}/orders"), handler::getOrders)
                 .andRoute(GET("/users/{id}"), handler::getById);
     }
 }

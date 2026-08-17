@@ -146,8 +146,8 @@ public interface ProductRepository {
 public interface OrderRepository {
     Mono<Order> save(Order order);
     Mono<Order> findById(UUID id);
+    Flux<Order> findByUserId(UUID userId);
     Mono<Order> updateStatus(Order order);
-    // findByUserId se agregará cuando la HU de consulta por usuario lo requiera.
 }
 
 // Puerto de cache
@@ -185,7 +185,7 @@ public interface TransactionPort {
 | `PlaceOrderUseCase` | `UserRepository`, `ProductRepository`, `ProductCachePort`, `OrderRepository`, `OrderEventPublisher`, `TransactionPort` | Valida usuario existe → valida cada producto existe → `decrementStockIfAvailable` por cada ítem dentro de transacción → guarda `Order` en `PENDING` → confirma Postgres → refresca cache de productos afectados → publica `OrderPlacedEvent` |
 | `GetOrderUseCase` | `OrderRepository` | Busca por ID → `OrderNotFoundException` si no existe |
 | `UpdateOrderStatusUseCase` | `OrderRepository`, `ProductRepository`, `ProductCachePort`, `OrderEventPublisher`, `TransactionPort` | Busca pedido → valida transición con `OrderStatus.canTransitionTo` → si es a `CANCELLED`, repone stock (`incrementStock` por cada ítem) dentro de transacción y refresca cache → si es a `COMPLETED`, publica `OrderCompletedEvent` después de confirmar |
-| `GetUserOrdersUseCase` *(planeado / bonus)* | `UserRepository`, `OrderRepository` | Valida usuario existe → retorna `Flux<Order>` |
+| `GetUserOrdersUseCase` *(bonus)* | `UserRepository`, `OrderRepository` | Valida usuario existe → retorna `Flux<Order>` con detalle de items; si no tiene pedidos retorna vacío |
 
 **Nota de atomicidad en `PlaceOrderUseCase`:** usar un puerto transaccional implementado con `TransactionalOperator` de Spring/R2DBC para envolver la secuencia de descuentos + guardado del pedido. Si cualquier producto falla por inexistente o stock insuficiente, toda la operación de Postgres hace rollback — no debe quedar un pedido con descuentos parciales. Redis y la notificación quedan fuera de la transacción de base de datos: cache se refresca después de confirmar Postgres y la notificación se emite como evento desacoplado.
 
@@ -516,7 +516,36 @@ Respuestas mínimas profesionales cubiertas para `PUT /orders/{id}/status`:
 | `503 Service Unavailable` | Persistencia temporalmente no disponible |
 | `500 Internal Server Error` | Fallback no controlado |
 
-**`GET /users/{id}/orders`** (Bonus) → `200`, array de pedidos del usuario (vacío si no tiene).
+**`GET /users/{id}/orders`** (Bonus)
+```json
+// Response 200
+{
+  "data": [
+    {
+      "id": "uuid",
+      "userId": "uuid",
+      "status": "PENDING",
+      "createdAt": "2026-08-17T12:00:00Z",
+      "items": [
+        { "productId": "uuid", "quantity": 2, "unitPriceAtOrderTime": 25000.00 }
+      ]
+    }
+  ],
+  "meta": { "path": "/users/{id}/orders", "timestamp": "2026-08-17T12:00:00Z" }
+}
+```
+
+Respuestas mínimas profesionales cubiertas para `GET /users/{id}/orders`:
+
+| Status | Caso |
+|---|---|
+| `200 OK` | Usuario existente; retorna lista de pedidos o lista vacía |
+| `400 Bad Request` | `id` inválido, no UUID |
+| `404 Not Found` | Usuario inexistente |
+| `503 Service Unavailable` | Persistencia temporalmente no disponible |
+| `500 Internal Server Error` | Fallback no controlado |
+
+No se implementa paginación por alcance de la prueba. Evolución recomendada: paginación por cursor o `page/size` con orden estable por `createdAt`.
 
 ### 6.4 Auth (Bonus — JWT)
 

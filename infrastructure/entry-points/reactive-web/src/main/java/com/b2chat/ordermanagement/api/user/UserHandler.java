@@ -1,9 +1,11 @@
 package com.b2chat.ordermanagement.api.user;
 
 import com.b2chat.ordermanagement.api.exception.InvalidRequestException;
+import com.b2chat.ordermanagement.api.order.OrderResponse;
 import com.b2chat.ordermanagement.api.response.ApiResponse;
 import com.b2chat.ordermanagement.api.validation.RequestValidator;
 import com.b2chat.ordermanagement.usecase.getuser.GetUserUseCase;
+import com.b2chat.ordermanagement.usecase.getuserorders.GetUserOrdersUseCase;
 import com.b2chat.ordermanagement.usecase.registeruser.RegisterUserUseCase;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
@@ -21,6 +23,7 @@ import java.util.UUID;
 public class UserHandler {
     private final RegisterUserUseCase registerUserUseCase;
     private final GetUserUseCase getUserUseCase;
+    private final GetUserOrdersUseCase getUserOrdersUseCase;
     private final RequestValidator requestValidator;
 
     public Mono<ServerResponse> register(ServerRequest serverRequest) {
@@ -43,6 +46,16 @@ public class UserHandler {
                 .flatMap(user -> ServerResponse.ok()
                         .contentType(MediaType.APPLICATION_JSON)
                         .bodyValue(ApiResponse.success(UserResponse.from(user), serverRequest.path())));
+    }
+
+    public Mono<ServerResponse> getOrders(ServerRequest serverRequest) {
+        return parseUserId(serverRequest.pathVariable("id"))
+                .flatMapMany(getUserOrdersUseCase::execute)
+                .map(OrderResponse::from)
+                .collectList()
+                .flatMap(orders -> ServerResponse.ok()
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .bodyValue(ApiResponse.success(orders, serverRequest.path())));
     }
 
     private Mono<UUID> parseUserId(String id) {

@@ -77,7 +77,7 @@ Backlog completo de historias de usuario y criterios de aceptación en [`docs/BA
 |---|---|---|
 | `POST` | `/users` | Registrar un nuevo usuario *(implementado)* |
 | `GET` | `/users/{id}` | Obtener detalles de un usuario *(implementado)* |
-| `GET` | `/users/{id}/orders` | Listar pedidos de un usuario *(planeado / bonus)* |
+| `GET` | `/users/{id}/orders` | Listar pedidos de un usuario *(implementado / bonus)* |
 
 ### Products
 | Método | Endpoint | Descripción |
@@ -149,6 +149,7 @@ Decisiones de alcance no especificadas explícitamente en el enunciado de la pru
 5. **Autenticación JWT:** endpoint simplificado de emisión de token basado en `userId`/`email` existente, sin flujo completo de credenciales/password, dado que el enunciado no lo especifica. Los endpoints de escritura quedarán protegidos cuando se implemente autenticación/roles; por ahora las escrituras de productos están públicas temporalmente para probar las HUs.
 6. **Concurrencia en stock:** UPDATE condicional atómico a nivel de base de datos, no lectura-luego-escritura en código.
 7. **Consistencia de cache en pedidos:** al crear o cancelar pedidos se refresca cache de productos afectados después de confirmar Postgres; no se intenta actualizar Redis dentro de la transacción de base de datos.
+8. **Historial de pedidos:** `GET /users/{id}/orders` se implementa sin paginación por alcance de la prueba. En producción debería evolucionar a paginación por cursor o `page/size` con orden estable por `createdAt`.
 
 ---
 

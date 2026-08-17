@@ -113,6 +113,40 @@ class OrderReactiveRepositoryAdapterTest {
     }
 
     @Test
+    void shouldFindOrdersByUserIdWithItems() {
+        var orderId = new UUID(1L, 1L);
+        var userId = new UUID(2L, 2L);
+        var productId = new UUID(3L, 3L);
+        when(orderRepository.findByUserIdOrderByCreatedAtDesc(userId)).thenReturn(Flux.just(new OrderData(
+                orderId,
+                userId,
+                "PENDING",
+                java.time.Instant.parse("2026-08-17T12:00:00Z"))));
+        when(orderItemRepository.findByOrderId(orderId)).thenReturn(Flux.just(new OrderItemData(
+                new UUID(4L, 4L),
+                orderId,
+                productId,
+                2,
+                new BigDecimal("25.50"))));
+
+        StepVerifier.create(adapter.findByUserId(userId))
+                .expectNextMatches(order -> order.getId().equals(orderId)
+                        && order.getUserId().equals(userId)
+                        && order.getItems().size() == 1
+                        && order.getItems().getFirst().getProductId().equals(productId))
+                .verifyComplete();
+    }
+
+    @Test
+    void shouldReturnEmptyWhenUserHasNoOrders() {
+        var userId = new UUID(2L, 2L);
+        when(orderRepository.findByUserIdOrderByCreatedAtDesc(userId)).thenReturn(Flux.empty());
+
+        StepVerifier.create(adapter.findByUserId(userId))
+                .verifyComplete();
+    }
+
+    @Test
     void shouldMapPersistenceFailuresWhenFindingOrderById() {
         var orderId = new UUID(1L, 1L);
         when(orderRepository.findById(orderId))

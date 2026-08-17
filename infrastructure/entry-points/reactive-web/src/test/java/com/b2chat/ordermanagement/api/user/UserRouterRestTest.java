@@ -4,9 +4,14 @@ import com.b2chat.ordermanagement.api.error.GlobalErrorWebExceptionHandler;
 import com.b2chat.ordermanagement.api.validation.RequestValidator;
 import com.b2chat.ordermanagement.model.common.RepositoryUnavailableException;
 import com.b2chat.ordermanagement.model.email.Email;
+import com.b2chat.ordermanagement.model.money.Money;
+import com.b2chat.ordermanagement.model.order.Order;
+import com.b2chat.ordermanagement.model.orderitem.OrderItem;
+import com.b2chat.ordermanagement.model.order.gateways.OrderRepository;
 import com.b2chat.ordermanagement.model.user.User;
 import com.b2chat.ordermanagement.model.user.gateways.UserRepository;
 import com.b2chat.ordermanagement.usecase.getuser.GetUserUseCase;
+import com.b2chat.ordermanagement.usecase.getuserorders.GetUserOrdersUseCase;
 import com.b2chat.ordermanagement.usecase.registeruser.RegisterUserUseCase;
 import jakarta.validation.Validation;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,8 +21,11 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.reactive.function.server.HandlerStrategies;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Flux;
 import tools.jackson.databind.ObjectMapper;
 
+import java.math.BigDecimal;
+import java.util.List;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -27,15 +35,19 @@ import static org.mockito.Mockito.when;
 
 class UserRouterRestTest {
     private UserRepository userRepository;
+    private OrderRepository orderRepository;
     private WebTestClient webTestClient;
 
     @BeforeEach
     void setUp() {
         userRepository = Mockito.mock(UserRepository.class);
+        orderRepository = Mockito.mock(OrderRepository.class);
         var registerUserUseCase = new RegisterUserUseCase(userRepository);
         var getUserUseCase = new GetUserUseCase(userRepository);
+        var getUserOrdersUseCase = new GetUserOrdersUseCase(userRepository, orderRepository);
         var validator = Validation.buildDefaultValidatorFactory().getValidator();
-        var handler = new UserHandler(registerUserUseCase, getUserUseCase, new RequestValidator(validator));
+        var handler = new UserHandler(registerUserUseCase, getUserUseCase, getUserOrdersUseCase,
+                new RequestValidator(validator));
         var router = new UserRouterRest().userRoutes(handler);
         var handlerStrategies = HandlerStrategies.builder()
                 .exceptionHandler(new GlobalErrorWebExceptionHandler(new ObjectMapper()))
@@ -214,6 +226,85 @@ class UserRouterRestTest {
                 .jsonPath("$.data.address").isEqualTo("Calle 123")
                 .jsonPath("$.meta.path").isEqualTo("/users/" + id)
                 .jsonPath("$.meta.timestamp").exists();
+    }
+
+    @Test
+    void shouldGetUserOrders() {
+        var userId = new UUID(1L, 1L);
+        var orderId = new UUID(3L, 3L);
+        var productId = new UUID(2L, 2L);
+        when(userRepository.findById(userId)).thenReturn(Mono.just(new User(
+                userId,
+                new Email("ana@example.com"),
+                "Ana Demo",
+                "Calle 123"
+        )));
+        when(orderRepository.findByUserId(userId)).thenReturn(Flux.just(Order.pending(userId, List.of(new OrderItem(
+                productId, 2, new Money(new BigDecimal("25.50"))))).withId(orderId)));
+
+        webTestClient.get()
+                .uri("/users/{id}/orders", userId)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.data[0].id").isEqualTo(orderId.toString())
+                .jsonPath("$.data[0].userId").isEqualTo(userId.toString())
+                .jsonPath("$.data[0].status").isEqualTo("PENDING")
+                .jsonPath("$.data[0].items[0].productId").isEqualTo(productId.toString())
+                .jsonPath("$.data[0].items[0].quantity").isEqualTo(2)
+                .jsonPath("$.data[0].items[0].unitPriceAtOrderTime").isEqualTo(25.50)
+                .jsonPath("$.meta.path").isEqualTo("/users/" + userId + "/orders");
+    }
+
+    @Test
+    void shouldReturnEmptyListWhenUserHasNoOrders() {
+        var userId = new UUID(1L, 1L);
+        when(userRepository.findById(userId)).thenReturn(Mono.just(new User(
+                userId,
+                new Email("ana@example.com"),
+                "Ana Demo",
+                "Calle 123"
+        )));
+        when(orderRepository.findByUserId(userId)).thenReturn(Flux.empty());
+
+        webTestClient.get()
+                .uri("/users/{id}/orders", userId)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.data").isArray()
+                .jsonPath("$.data.length()").isEqualTo(0)
+                .jsonPath("$.meta.path").isEqualTo("/users/" + userId + "/orders");
+    }
+
+    @Test
+    void shouldReturnNotFoundWhenGettingOrdersForMissingUser() {
+        var userId = new UUID(1L, 1L);
+        when(userRepository.findById(userId)).thenReturn(Mono.empty());
+
+        webTestClient.get()
+                .uri("/users/{id}/orders", userId)
+                .exchange()
+                .expectStatus().isNotFound()
+                .expectBody()
+                .jsonPath("$.error.code").isEqualTo("USER_NOT_FOUND")
+                .jsonPath("$.error.status").isEqualTo(404)
+                .jsonPath("$.error.path").isEqualTo("/users/" + userId + "/orders");
+
+        verify(orderRepository, never()).findByUserId(userId);
+    }
+
+    @Test
+    void shouldReturnBadRequestWhenGettingOrdersWithInvalidUserId() {
+        webTestClient.get()
+                .uri("/users/not-a-uuid/orders")
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.error.code").isEqualTo("INVALID_REQUEST")
+                .jsonPath("$.error.message").isEqualTo("Path variable id must be a valid UUID")
+                .jsonPath("$.error.status").isEqualTo(400)
+                .jsonPath("$.error.path").isEqualTo("/users/not-a-uuid/orders");
     }
 
     @Test
