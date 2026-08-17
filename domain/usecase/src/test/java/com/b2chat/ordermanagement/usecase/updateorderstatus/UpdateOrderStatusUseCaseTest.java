@@ -153,6 +153,26 @@ class UpdateOrderStatusUseCaseTest {
         verify(orderRepository, never()).updateStatus(any());
     }
 
+    @Test
+    void shouldSucceedEvenIfCacheUpdateFailsWhenCancelling() {
+        var orderId = new UUID(1L, 1L);
+        var productId = new UUID(2L, 2L);
+        var order = order(orderId, OrderStatus.PROCESSING);
+        when(orderRepository.findById(orderId)).thenReturn(Mono.just(order));
+        when(productRepository.incrementStock(productId, 2)).thenReturn(Mono.just(true));
+        when(productRepository.findById(productId)).thenReturn(Mono.just(product(productId)));
+        when(productCachePort.put(any())).thenReturn(Mono.error(new RuntimeException("Cache unavailable")));
+        when(orderRepository.updateStatus(any(Order.class))).thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        StepVerifier.create(useCase.execute(orderId, OrderStatus.CANCELLED))
+                .expectNextMatches(updated -> updated.getStatus() == OrderStatus.CANCELLED)
+                .verifyComplete();
+
+        verify(productRepository).incrementStock(productId, 2);
+        verify(productCachePort).put(any());
+        verify(orderRepository).updateStatus(any());
+    }
+
     private Order order(UUID orderId, OrderStatus status) {
         return new Order(orderId, new UUID(3L, 3L), List.of(new OrderItem(
                 new UUID(2L, 2L), 2, new Money(new BigDecimal("25.50")))), status, null);

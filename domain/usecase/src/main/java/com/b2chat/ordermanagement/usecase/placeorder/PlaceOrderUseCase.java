@@ -85,6 +85,7 @@ public class PlaceOrderUseCase {
     }
 
     private void validateItem(PlaceOrderItemCommand item) {
+        // Defensive check: null cannot occur in normal flow (Flux.fromIterable rejects nulls)
         if (item == null) {
             throw new EmptyOrderItemsException();
         }

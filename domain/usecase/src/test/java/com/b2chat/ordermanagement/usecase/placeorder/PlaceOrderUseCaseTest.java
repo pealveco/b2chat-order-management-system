@@ -142,6 +142,67 @@ class PlaceOrderUseCaseTest {
         verify(orderRepository, never()).save(any());
     }
 
+    @Test
+    void shouldSucceedEvenIfCacheUpdateFails() {
+        var userId = new UUID(1L, 1L);
+        var productId = new UUID(2L, 2L);
+        var orderId = new UUID(3L, 3L);
+        when(userRepository.findById(userId)).thenReturn(Mono.just(user(userId)));
+        when(productRepository.findById(productId)).thenReturn(Mono.just(product(productId, 10)));
+        when(productRepository.decrementStockIfAvailable(productId, 2)).thenReturn(Mono.just(true));
+        when(orderRepository.save(any())).thenAnswer(invocation -> {
+            var order = invocation.getArgument(0, Order.class);
+            return Mono.just(order.withId(orderId));
+        });
+        when(productCachePort.put(any())).thenReturn(Mono.error(new RuntimeException("Cache unavailable")));
+
+        StepVerifier.create(useCase.execute(userId, List.of(new PlaceOrderItemCommand(productId, 2))))
+                .expectNextMatches(order -> order.getId().equals(orderId)
+                        && order.getUserId().equals(userId))
+                .verifyComplete();
+
+        verify(orderRepository).save(any());
+        verify(productCachePort).put(any());
+        verify(orderEventPublisher).publishOrderPlaced(any());
+    }
+
+    @Test
+    void shouldFailWhenItemsListIsNull() {
+        var userId = new UUID(1L, 1L);
+        when(userRepository.findById(userId)).thenReturn(Mono.just(user(userId)));
+
+        org.junit.jupiter.api.Assertions.assertThrows(com.b2chat.ordermanagement.model.order.EmptyOrderItemsException.class,
+                () -> useCase.execute(userId, null).block());
+
+        verify(userRepository, never()).findById(any());
+        verify(orderRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldFailWhenItemsListIsEmpty() {
+        var userId = new UUID(1L, 1L);
+        when(userRepository.findById(userId)).thenReturn(Mono.just(user(userId)));
+
+        org.junit.jupiter.api.Assertions.assertThrows(com.b2chat.ordermanagement.model.order.EmptyOrderItemsException.class,
+                () -> useCase.execute(userId, List.of()).block());
+
+        verify(userRepository, never()).findById(any());
+        verify(orderRepository, never()).save(any());
+    }
+
+
+    @Test
+    void shouldFailWhenProductIdIsNull() {
+        var userId = new UUID(1L, 1L);
+        when(userRepository.findById(userId)).thenReturn(Mono.just(user(userId)));
+
+        org.junit.jupiter.api.Assertions.assertThrows(com.b2chat.ordermanagement.model.common.RequiredFieldException.class,
+                () -> useCase.execute(userId, List.of(new PlaceOrderItemCommand(null, 2))).block());
+
+        verify(productRepository, never()).findById(any());
+        verify(orderRepository, never()).save(any());
+    }
+
     private User user(UUID id) {
         return new User(id, new Email("buyer@example.com"), "Buyer", "Address");
     }
