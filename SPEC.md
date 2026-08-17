@@ -820,7 +820,52 @@ Resumen de la decisión US-007:
 
 ## 12. Docker
 
-`docker-compose.yml` con servicios `app`, `postgres`, `redis`, healthchecks para orden de arranque. `Dockerfile` multi-stage ya generado por el scaffold en `deployment/Dockerfile` — ajustar según se requiera para exponer el puerto correcto y variables de entorno (`SPRING_R2DBC_URL`, `SPRING_REDIS_HOST`, `JWT_SECRET`).
+US-013 queda cubierta con `docker-compose.yml` y `deployment/Dockerfile`.
+
+Servicios:
+
+| Servicio | Imagen / build | Puerto local | Responsabilidad |
+|---|---|---|---|
+| `app` | build local con `deployment/Dockerfile` | `${SERVER_PORT:-8080}:8080` | Spring Boot WebFlux |
+| `postgres` | `postgres:16-alpine` | `${POSTGRES_PORT:-5432}:5432` | Base de datos principal |
+| `redis` | `redis:7-alpine` | `${REDIS_PORT:-6379}:6379` | Cache de catálogo |
+
+Arranque:
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Compatibilidad con Docker Compose legacy:
+
+```bash
+cp .env.example .env
+docker-compose up --build
+```
+
+Healthchecks:
+
+- `postgres`: `pg_isready` contra `${POSTGRES_DB}` y `${POSTGRES_USER}`.
+- `redis`: `redis-cli ping`.
+- `app`: depende de `postgres` y `redis` con `condition: service_healthy`, evitando arrancar antes de que las dependencias estén disponibles.
+
+Variables relevantes:
+
+- `.env.example`: plantilla versionada para que el evaluador pueda crear el ambiente local.
+- `.env`: valores para Docker Compose; usa hosts internos `postgres` y `redis`; no se versiona.
+- `oms.env`: valores para IntelliJ/local; usa `localhost`.
+- `SPRING_R2DBC_URL`, `SPRING_R2DBC_USERNAME`, `SPRING_R2DBC_PASSWORD`: conexión R2DBC a Postgres.
+- `SPRING_REDIS_HOST`, `SPRING_REDIS_PORT`: conexión a Redis.
+- `JWT_SECRET`: secreto local para firma `HS256`, mínimo 32 bytes.
+- `JWT_EXPIRATION_MINUTES`: expiración de tokens emitidos.
+
+El `Dockerfile` es multi-stage:
+
+- Stage `builder`: `eclipse-temurin:21-jdk-alpine`, ejecuta Gradle para generar el `bootJar`.
+- Stage final: `eclipse-temurin:21-jre-alpine`, copia solo el JAR ejecutable, usa usuario no root y expone puerto `8080`.
+
+Nota: el build de la imagen genera el artefacto ejecutable. La ejecución completa de tests y PIT se valida fuera del Docker build con Gradle, porque parte de los tests de integración usan Testcontainers/Docker y no deben depender del entorno interno del build de imagen.
 
 ---
 

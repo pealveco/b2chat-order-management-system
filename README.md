@@ -21,10 +21,22 @@ Backend de un sistema simplificado de gestión de pedidos de e-commerce, desarro
 
 ## Cómo ejecutar el proyecto
 
-La aplicación se levanta junto con PostgreSQL y Redis usando Docker Compose. El archivo `.env` contiene valores de desarrollo local y no se versiona porque incluye credenciales.
+La aplicación se levanta junto con PostgreSQL y Redis usando Docker Compose. El archivo `.env` contiene valores de desarrollo local para contenedores y no se versiona porque incluye credenciales. Para ejecución local desde IntelliJ (por ejemplo) se usa `oms.env`, con los mismos valores funcionales pero apuntando a `localhost`.
+
+Primero crea el `.env` local desde el ejemplo versionado:
+
+```bash
+cp .env.example .env
+```
 
 ```bash
 docker compose up --build
+```
+
+Si tu instalación usa el binario legacy:
+
+```bash
+docker-compose up --build
 ```
 
 Este comando crea y levanta:
@@ -33,7 +45,21 @@ Este comando crea y levanta:
 - `postgres`: PostgreSQL 16, expuesto en `localhost:5432`, con volumen persistente `postgres_data`.
 - `redis`: Redis 7, expuesto en `localhost:6379`.
 
-`app` depende de los healthchecks de `postgres` y `redis`, por lo que no intenta arrancar hasta que ambos servicios estén disponibles.
+`app` depende de los healthchecks de `postgres` y `redis`, por lo que no intenta arrancar hasta que ambos servicios estén disponibles. La app se conecta a esos servicios por variables de entorno:
+
+| Variable | Uso en Docker Compose |
+|---|---|
+| `SPRING_R2DBC_URL` | URL R2DBC hacia Postgres dentro de la red Docker (`postgres:5432`) |
+| `SPRING_R2DBC_USERNAME` / `SPRING_R2DBC_PASSWORD` | Credenciales de Postgres |
+| `SPRING_REDIS_HOST` / `SPRING_REDIS_PORT` | Host y puerto de Redis dentro de la red Docker (`redis:6379`) |
+| `JWT_SECRET` | Secreto local de firma JWT, mínimo 32 bytes |
+| `JWT_EXPIRATION_MINUTES` | Tiempo de expiración de los JWT emitidos |
+
+Para verificar que la app quedó arriba:
+
+```bash
+curl --location 'http://localhost:8080/actuator/health'
+```
 
 Para detener los contenedores:
 

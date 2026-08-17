@@ -1,7 +1,7 @@
 .git
 .gradle
 .idea
-.env
+*.env
 build-cache
 **/build
 *.iml
