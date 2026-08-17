@@ -91,7 +91,7 @@ Backlog completo de historias de usuario y criterios de aceptación en [`docs/BA
 | Método | Endpoint | Descripción |
 |---|---|---|
 | `POST` | `/orders` | Crear un pedido (persistencia transaccional + notificación asíncrona) *(implementado)* |
-| `GET` | `/orders/{id}` | Obtener detalle de un pedido *(planeado)* |
+| `GET` | `/orders/{id}` | Obtener detalle de un pedido *(implementado)* |
 | `PUT` | `/orders/{id}/status` | Actualizar estado de un pedido *(planeado)* |
 
 ### Auth *(bonus)*

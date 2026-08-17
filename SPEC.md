@@ -143,7 +143,8 @@ public interface ProductRepository {
 
 public interface OrderRepository {
     Mono<Order> save(Order order);
-    // findById, findByUserId y updateStatus se agregan cuando las HUs de consulta/estado los requieran.
+    Mono<Order> findById(UUID id);
+    // findByUserId y updateStatus se agregan cuando las HUs de consulta/estado los requieran.
 }
 
 // Puerto de cache
@@ -178,7 +179,7 @@ public interface TransactionPort {
 | `UpdateProductUseCase` | `ProductRepository`, `ProductCachePort` | Actualiza Postgres → actualiza cache (write-through) |
 | `DeleteProductUseCase` | `ProductRepository`, `ProductCachePort` | Soft delete en Postgres (`active=false`) → evict de cache |
 | `PlaceOrderUseCase` | `UserRepository`, `ProductRepository`, `ProductCachePort`, `OrderRepository`, `OrderEventPublisher`, `TransactionPort` | Valida usuario existe → valida cada producto existe → `decrementStockIfAvailable` por cada ítem dentro de transacción → guarda `Order` en `PENDING` → confirma Postgres → invalida cache de productos afectados → publica `OrderPlacedEvent` |
-| `GetOrderUseCase` *(planeado)* | `OrderRepository` | Busca por ID → error de dominio si no existe |
+| `GetOrderUseCase` | `OrderRepository` | Busca por ID → `OrderNotFoundException` si no existe |
 | `UpdateOrderStatusUseCase` *(planeado)* | `OrderRepository`, `ProductRepository`, `OrderEventPublisher` | Valida transición con `OrderStatus.canTransitionTo` → si es a `CANCELLED`, repone stock (`incrementStock` por cada ítem) → si es a `COMPLETED`, publicará un evento de completado cuando esa HU exista |
 | `GetUserOrdersUseCase` *(planeado / bonus)* | `UserRepository`, `OrderRepository` | Valida usuario existe → retorna `Flux<Order>` |
 
@@ -429,7 +430,50 @@ Respuestas mínimas profesionales cubiertas para `POST /orders`:
 | `503 Service Unavailable` | Persistencia temporalmente no disponible |
 | `500 Internal Server Error` | Fallback no controlado |
 
-**`GET /orders/{id}`** → `200` con detalle completo, `404` si no existe.
+**`GET /orders/{id}`**
+```json
+// Response 200
+{
+  "data": {
+    "id": "uuid",
+    "userId": "uuid",
+    "status": "PENDING",
+    "createdAt": "2026-08-16T00:00:00Z",
+    "items": [
+      {
+        "productId": "uuid",
+        "quantity": 2,
+        "unitPriceAtOrderTime": 25000
+      }
+    ]
+  },
+  "meta": {
+    "path": "/orders/{id}",
+    "timestamp": "2026-08-16T00:00:00Z"
+  }
+}
+// Response 404
+{
+  "error": {
+    "code": "ORDER_NOT_FOUND",
+    "message": "Order with id {id} was not found",
+    "status": 404,
+    "path": "/orders/{id}",
+    "timestamp": "2026-08-16T00:00:00Z",
+    "details": []
+  }
+}
+```
+
+Respuestas mínimas profesionales cubiertas para `GET /orders/{id}`:
+
+| Status | Caso |
+|---|---|
+| `200 OK` | Pedido encontrado con `items` |
+| `400 Bad Request` | `id` con formato inválido, no UUID |
+| `404 Not Found` | Pedido inexistente |
+| `503 Service Unavailable` | Persistencia temporalmente no disponible |
+| `500 Internal Server Error` | Fallback no controlado |
 
 **`PUT /orders/{id}/status`**
 ```json

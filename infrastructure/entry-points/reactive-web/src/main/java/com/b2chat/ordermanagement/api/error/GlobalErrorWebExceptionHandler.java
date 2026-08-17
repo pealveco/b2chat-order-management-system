@@ -3,6 +3,7 @@ package com.b2chat.ordermanagement.api.error;
 import com.b2chat.ordermanagement.model.common.DomainException;
 import com.b2chat.ordermanagement.model.common.RepositoryUnavailableException;
 import com.b2chat.ordermanagement.model.order.InsufficientStockException;
+import com.b2chat.ordermanagement.model.order.OrderNotFoundException;
 import com.b2chat.ordermanagement.model.product.ProductNotFoundException;
 import com.b2chat.ordermanagement.model.user.EmailAlreadyExistsException;
 import com.b2chat.ordermanagement.model.user.UserNotFoundException;
@@ -61,7 +62,8 @@ public class GlobalErrorWebExceptionHandler implements WebExceptionHandler {
         if (throwable instanceof EmailAlreadyExistsException || throwable instanceof InsufficientStockException) {
             return HttpStatus.CONFLICT;
         }
-        if (throwable instanceof UserNotFoundException || throwable instanceof ProductNotFoundException) {
+        if (throwable instanceof UserNotFoundException || throwable instanceof ProductNotFoundException
+                || throwable instanceof OrderNotFoundException) {
             return HttpStatus.NOT_FOUND;
         }
         if (throwable instanceof RepositoryUnavailableException) {

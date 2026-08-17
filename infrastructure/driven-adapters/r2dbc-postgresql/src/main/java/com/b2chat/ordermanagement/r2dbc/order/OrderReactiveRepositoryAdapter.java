@@ -31,13 +31,28 @@ public class OrderReactiveRepositoryAdapter implements OrderRepository {
                 .flatMap(savedOrder -> saveItems(savedOrder.getId(), order.getItems())
                         .map(savedItems -> toOrder(savedOrder, savedItems)))
                 .onErrorMap(DataAccessException.class,
-                        error -> new RepositoryUnavailableException("Order repository is temporarily unavailable"));
+                        error -> new RepositoryUnavailableException("Order repository is temporarily unavailable", error));
+    }
+
+    @Override
+    public Mono<Order> findById(UUID id) {
+        return orderRepository.findById(id)
+                .flatMap(orderData -> findItems(orderData.getId())
+                        .map(items -> toOrder(orderData, items)))
+                .onErrorMap(DataAccessException.class,
+                        error -> new RepositoryUnavailableException("Order repository is temporarily unavailable", error));
     }
 
     private Mono<List<OrderItem>> saveItems(UUID orderId, List<OrderItem> items) {
         return Flux.fromIterable(items)
                 .map(item -> toOrderItemData(orderId, item))
                 .as(orderItemRepository::saveAll)
+                .map(this::toOrderItem)
+                .collectList();
+    }
+
+    private Mono<List<OrderItem>> findItems(UUID orderId) {
+        return orderItemRepository.findByOrderId(orderId)
                 .map(this::toOrderItem)
                 .collectList();
     }

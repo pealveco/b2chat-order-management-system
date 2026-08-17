@@ -5,6 +5,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.ServerResponse;
 
+import static org.springframework.web.reactive.function.server.RequestPredicates.GET;
 import static org.springframework.web.reactive.function.server.RequestPredicates.POST;
 import static org.springframework.web.reactive.function.server.RouterFunctions.route;
 
@@ -12,6 +13,7 @@ import static org.springframework.web.reactive.function.server.RouterFunctions.r
 public class OrderRouterRest {
     @Bean
     public RouterFunction<ServerResponse> orderRoutes(OrderHandler handler) {
-        return route(POST("/orders"), handler::place);
+        return route(POST("/orders"), handler::place)
+                .andRoute(GET("/orders/{id}"), handler::getById);
     }
 }

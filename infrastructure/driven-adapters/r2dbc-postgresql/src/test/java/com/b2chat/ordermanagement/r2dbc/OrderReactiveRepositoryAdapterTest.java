@@ -74,4 +74,51 @@ class OrderReactiveRepositoryAdapterTest {
                 .expectError(RepositoryUnavailableException.class)
                 .verify();
     }
+
+    @Test
+    void shouldFindOrderByIdWithItems() {
+        var orderId = new UUID(1L, 1L);
+        var userId = new UUID(2L, 2L);
+        var productId = new UUID(3L, 3L);
+        when(orderRepository.findById(orderId)).thenReturn(Mono.just(new OrderData(
+                orderId,
+                userId,
+                "PENDING",
+                java.time.Instant.parse("2026-08-17T12:00:00Z"))));
+        when(orderItemRepository.findByOrderId(orderId)).thenReturn(Flux.just(new OrderItemData(
+                new UUID(4L, 4L),
+                orderId,
+                productId,
+                2,
+                new BigDecimal("25.50"))));
+
+        StepVerifier.create(adapter.findById(orderId))
+                .expectNextMatches(order -> order.getId().equals(orderId)
+                        && order.getUserId().equals(userId)
+                        && order.getStatus().name().equals("PENDING")
+                        && order.getItems().size() == 1
+                        && order.getItems().getFirst().getProductId().equals(productId)
+                        && order.getItems().getFirst().getQuantity().equals(2))
+                .verifyComplete();
+    }
+
+    @Test
+    void shouldReturnEmptyWhenOrderDoesNotExist() {
+        var orderId = new UUID(1L, 1L);
+        when(orderRepository.findById(orderId)).thenReturn(Mono.empty());
+
+        StepVerifier.create(adapter.findById(orderId))
+                .verifyComplete();
+    }
+
+    @Test
+    void shouldMapPersistenceFailuresWhenFindingOrderById() {
+        var orderId = new UUID(1L, 1L);
+        when(orderRepository.findById(orderId))
+                .thenReturn(Mono.error(new DataAccessResourceFailureException("connection failed")));
+
+        StepVerifier.create(adapter.findById(orderId))
+                .expectError(RepositoryUnavailableException.class)
+                .verify();
+    }
 }

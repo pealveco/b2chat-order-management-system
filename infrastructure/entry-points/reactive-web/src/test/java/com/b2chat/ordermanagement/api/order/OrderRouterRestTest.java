@@ -6,6 +6,7 @@ import com.b2chat.ordermanagement.model.common.gateways.TransactionPort;
 import com.b2chat.ordermanagement.model.email.Email;
 import com.b2chat.ordermanagement.model.money.Money;
 import com.b2chat.ordermanagement.model.order.Order;
+import com.b2chat.ordermanagement.model.orderitem.OrderItem;
 import com.b2chat.ordermanagement.model.order.gateways.OrderEventPublisher;
 import com.b2chat.ordermanagement.model.order.gateways.OrderRepository;
 import com.b2chat.ordermanagement.model.product.Product;
@@ -13,6 +14,7 @@ import com.b2chat.ordermanagement.model.product.gateways.ProductCachePort;
 import com.b2chat.ordermanagement.model.product.gateways.ProductRepository;
 import com.b2chat.ordermanagement.model.user.User;
 import com.b2chat.ordermanagement.model.user.gateways.UserRepository;
+import com.b2chat.ordermanagement.usecase.getorder.GetOrderUseCase;
 import com.b2chat.ordermanagement.usecase.placeorder.PlaceOrderUseCase;
 import jakarta.validation.Validation;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,6 +27,7 @@ import reactor.core.publisher.Mono;
 import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -55,8 +58,9 @@ class OrderRouterRestTest {
         };
         var placeOrderUseCase = new PlaceOrderUseCase(userRepository, productRepository, productCachePort,
                 orderRepository, orderEventPublisher, transactionPort);
+        var getOrderUseCase = new GetOrderUseCase(orderRepository);
         var validator = Validation.buildDefaultValidatorFactory().getValidator();
-        var handler = new OrderHandler(placeOrderUseCase, new RequestValidator(validator));
+        var handler = new OrderHandler(placeOrderUseCase, getOrderUseCase, new RequestValidator(validator));
         var router = new OrderRouterRest().orderRoutes(handler);
         var handlerStrategies = HandlerStrategies.builder()
                 .exceptionHandler(new GlobalErrorWebExceptionHandler(new ObjectMapper()))
@@ -98,6 +102,53 @@ class OrderRouterRestTest {
                 .jsonPath("$.meta.path").isEqualTo("/orders");
 
         verify(orderEventPublisher).publishOrderPlaced(any());
+    }
+
+    @Test
+    void shouldGetOrderById() {
+        var orderId = new UUID(3L, 3L);
+        var userId = new UUID(1L, 1L);
+        var productId = new UUID(2L, 2L);
+        when(orderRepository.findById(orderId)).thenReturn(Mono.just(Order.pending(userId, List.of(new OrderItem(
+                productId, 2, new Money(new BigDecimal("25.50"))))).withId(orderId)));
+
+        webTestClient.get()
+                .uri("/orders/00000000-0000-0003-0000-000000000003")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.data.id").isEqualTo(orderId.toString())
+                .jsonPath("$.data.userId").isEqualTo(userId.toString())
+                .jsonPath("$.data.status").isEqualTo("PENDING")
+                .jsonPath("$.data.items[0].productId").isEqualTo(productId.toString())
+                .jsonPath("$.data.items[0].quantity").isEqualTo(2)
+                .jsonPath("$.data.items[0].unitPriceAtOrderTime").isEqualTo(25.50)
+                .jsonPath("$.meta.path").isEqualTo("/orders/00000000-0000-0003-0000-000000000003");
+    }
+
+    @Test
+    void shouldReturnNotFoundWhenOrderDoesNotExist() {
+        var orderId = new UUID(3L, 3L);
+        when(orderRepository.findById(orderId)).thenReturn(Mono.empty());
+
+        webTestClient.get()
+                .uri("/orders/00000000-0000-0003-0000-000000000003")
+                .exchange()
+                .expectStatus().isNotFound()
+                .expectBody()
+                .jsonPath("$.error.code").isEqualTo("ORDER_NOT_FOUND")
+                .jsonPath("$.error.status").isEqualTo(404);
+    }
+
+    @Test
+    void shouldReturnBadRequestWhenOrderIdIsInvalid() {
+        webTestClient.get()
+                .uri("/orders/not-a-uuid")
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.error.code").isEqualTo("INVALID_REQUEST")
+                .jsonPath("$.error.message").isEqualTo("Path variable id must be a valid UUID");
     }
 
     @Test
