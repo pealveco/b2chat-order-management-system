@@ -126,9 +126,9 @@ public interface UserRepository {
 
 public interface ProductRepository {
     Mono<Product> save(Product product);
-    // Los siguientes métodos se agregan cuando las HUs los necesiten:
     Mono<Product> findById(UUID id);
-    Flux<Product> findAllActive();
+    Flux<Product> findAll();
+    // Los siguientes métodos se agregan cuando las HUs los necesiten:
     Mono<Void> deleteById(UUID id); // soft delete: update active=false
     Mono<Long> decrementStockIfAvailable(UUID productId, int quantity);
     // ^ UPDATE condicional atómico: WHERE id=? AND stock >= ? -> retorna filas afectadas
@@ -361,6 +361,8 @@ US-004 usa read-through fallback dentro de `ListProductsUseCase`: intenta leer R
 
 **`PUT /products/{id}`** → mismo body que POST, `200` actualizado, `404` si no existe.
 
+US-005 usa write-through secuencial dentro de `UpdateProductUseCase`: valida que el producto exista en Postgres, guarda los nuevos datos mediante `ProductRepository` y solo después actualiza Redis mediante `ProductCachePort`. Si Postgres falla, Redis no se actualiza. Si Redis falla después de confirmar Postgres, la API responde `503 Service Unavailable` con el envelope estándar.
+
 **`DELETE /products/{id}`** → `204`, `404` si no existe.
 
 ### 6.3 Orders
@@ -399,7 +401,7 @@ US-004 usa read-through fallback dentro de `ListProductsUseCase`: intenta leer R
 { "token": "eyJhbGciOi..." }
 ```
 
-Endpoints protegidos (requieren `Authorization: Bearer {token}`): operaciones de escritura operativas (`POST`, `PUT`, `DELETE`) según alcance de cada HU. `POST /users` queda público para registro. `POST /products` queda temporalmente público durante US-003 porque aún no existe HU de autenticación/roles de administrador. Los `GET` quedan abiertos salvo que una HU indique lo contrario.
+Endpoints protegidos (requieren `Authorization: Bearer {token}`): operaciones de escritura operativas (`POST`, `PUT`, `DELETE`) según alcance de cada HU. `POST /users` queda público para registro. `POST /products` y `PUT /products/{id}` quedan temporalmente públicos durante US-003/US-005 porque aún no existe HU de autenticación/roles de administrador. Los `GET` quedan abiertos salvo que una HU indique lo contrario.
 
 ---
 
@@ -583,7 +585,7 @@ Resumen de la decisión para retomar US-007:
 - Librería: `io.jsonwebtoken:jjwt-api` + `jjwt-impl` + `jjwt-jackson`.
 - `SecurityWebFilterChain` (Spring Security Reactive) protegiendo operaciones de escritura según alcance de cada HU.
 - `POST /users` queda público para permitir registro de usuarios.
-- `POST /products` queda público temporalmente hasta implementar autenticación/roles de administrador.
+- `POST /products` y `PUT /products/{id}` quedan públicos temporalmente hasta implementar autenticación/roles de administrador.
 - Regla general futura: proteger `POST`, `PUT`, `DELETE` operativos; `GET` públicos salvo que una HU indique lo contrario.
 - Secret de firma vía variable de entorno (`JWT_SECRET`), nunca hardcoded — coherente con buenas prácticas ya aplicadas en tu experiencia (Cognito/OAuth2 en AB InBev).
 

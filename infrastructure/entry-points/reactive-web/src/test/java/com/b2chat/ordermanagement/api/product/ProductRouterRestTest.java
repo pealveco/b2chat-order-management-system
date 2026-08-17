@@ -8,6 +8,7 @@ import com.b2chat.ordermanagement.model.product.gateways.ProductCachePort;
 import com.b2chat.ordermanagement.model.product.gateways.ProductRepository;
 import com.b2chat.ordermanagement.usecase.createproduct.CreateProductUseCase;
 import com.b2chat.ordermanagement.usecase.listproducts.ListProductsUseCase;
+import com.b2chat.ordermanagement.usecase.updateproduct.UpdateProductUseCase;
 import jakarta.validation.Validation;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -39,8 +40,10 @@ class ProductRouterRestTest {
         productCachePort = Mockito.mock(ProductCachePort.class);
         var createProductUseCase = new CreateProductUseCase(productRepository, productCachePort);
         var listProductsUseCase = new ListProductsUseCase(productRepository, productCachePort);
+        var updateProductUseCase = new UpdateProductUseCase(productRepository, productCachePort);
         var validator = Validation.buildDefaultValidatorFactory().getValidator();
-        var handler = new ProductHandler(createProductUseCase, listProductsUseCase, new RequestValidator(validator));
+        var handler = new ProductHandler(createProductUseCase, listProductsUseCase,
+                updateProductUseCase, new RequestValidator(validator));
         var router = new ProductRouterRest().productRoutes(handler);
         var handlerStrategies = HandlerStrategies.builder()
                 .exceptionHandler(new GlobalErrorWebExceptionHandler(new ObjectMapper()))
@@ -268,5 +271,129 @@ class ProductRouterRestTest {
                 .jsonPath("$.data").isArray()
                 .jsonPath("$.data.length()").isEqualTo(0)
                 .jsonPath("$.meta.path").isEqualTo("/products");
+    }
+
+    @Test
+    void shouldUpdateProduct() {
+        var id = new UUID(1L, 1L);
+        var existingProduct = new Product(id, "Keyboard", "Mechanical keyboard",
+                new com.b2chat.ordermanagement.model.money.Money(new BigDecimal("25.50")), 10);
+        when(productRepository.findById(id)).thenReturn(Mono.just(existingProduct));
+        when(productRepository.save(any())).thenAnswer(invocation -> Mono.just(invocation.getArgument(0, Product.class)));
+        when(productCachePort.put(any())).thenReturn(Mono.empty());
+
+        webTestClient.put()
+                .uri("/products/{id}", id)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {"name":"Mouse","description":"Wireless mouse","price":15.75,"stock":25}
+                        """)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.data.id").isEqualTo(id.toString())
+                .jsonPath("$.data.name").isEqualTo("Mouse")
+                .jsonPath("$.data.description").isEqualTo("Wireless mouse")
+                .jsonPath("$.data.price").isEqualTo(15.75)
+                .jsonPath("$.data.stock").isEqualTo(25)
+                .jsonPath("$.meta.path").isEqualTo("/products/" + id);
+
+        verify(productRepository).findById(id);
+        verify(productRepository).save(any());
+        verify(productCachePort).put(any());
+    }
+
+    @Test
+    void shouldReturnNotFoundWhenUpdatingMissingProduct() {
+        var id = new UUID(1L, 1L);
+        when(productRepository.findById(id)).thenReturn(Mono.empty());
+
+        webTestClient.put()
+                .uri("/products/{id}", id)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {"name":"Mouse","description":"Wireless mouse","price":15.75,"stock":25}
+                        """)
+                .exchange()
+                .expectStatus().isNotFound()
+                .expectBody()
+                .jsonPath("$.error.code").isEqualTo("PRODUCT_NOT_FOUND")
+                .jsonPath("$.error.message").isEqualTo("Product with id " + id + " was not found")
+                .jsonPath("$.error.status").isEqualTo(404);
+
+        verify(productRepository).findById(id);
+        verify(productRepository, never()).save(any());
+        verify(productCachePort, never()).put(any());
+    }
+
+    @Test
+    void shouldReturnBadRequestWhenProductIdIsInvalid() {
+        webTestClient.put()
+                .uri("/products/not-a-uuid")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {"name":"Mouse","description":"Wireless mouse","price":15.75,"stock":25}
+                        """)
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.error.code").isEqualTo("INVALID_REQUEST")
+                .jsonPath("$.error.message").isEqualTo("Path variable id must be a valid UUID")
+                .jsonPath("$.error.status").isEqualTo(400);
+
+        verify(productRepository, never()).findById(any());
+        verify(productRepository, never()).save(any());
+        verify(productCachePort, never()).put(any());
+    }
+
+    @Test
+    void shouldReturnBadRequestWhenUpdatePayloadIsInvalid() {
+        var id = new UUID(1L, 1L);
+
+        webTestClient.put()
+                .uri("/products/{id}", id)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {"name":"","description":"Wireless mouse","price":0,"stock":-1}
+                        """)
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.error.code").isEqualTo("INVALID_REQUEST")
+                .jsonPath("$.error.message").isEqualTo("Request validation failed")
+                .jsonPath("$.error.details[?(@.field == 'name')]").exists()
+                .jsonPath("$.error.details[?(@.field == 'price')]").exists()
+                .jsonPath("$.error.details[?(@.field == 'stock')]").exists();
+
+        verify(productRepository, never()).findById(any());
+        verify(productRepository, never()).save(any());
+        verify(productCachePort, never()).put(any());
+    }
+
+    @Test
+    void shouldNotUpdateCacheWhenUpdatePersistenceFails() {
+        var id = new UUID(1L, 1L);
+        var existingProduct = new Product(id, "Keyboard", "Mechanical keyboard",
+                new com.b2chat.ordermanagement.model.money.Money(new BigDecimal("25.50")), 10);
+        when(productRepository.findById(id)).thenReturn(Mono.just(existingProduct));
+        when(productRepository.save(any()))
+                .thenReturn(Mono.error(new RepositoryUnavailableException(
+                        "Product repository is temporarily unavailable")));
+
+        webTestClient.put()
+                .uri("/products/{id}", id)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {"name":"Mouse","description":"Wireless mouse","price":15.75,"stock":25}
+                        """)
+                .exchange()
+                .expectStatus().isEqualTo(503)
+                .expectBody()
+                .jsonPath("$.error.code").isEqualTo("SERVICE_UNAVAILABLE")
+                .jsonPath("$.error.message").isEqualTo("Product repository is temporarily unavailable");
+
+        verify(productRepository).findById(id);
+        verify(productRepository).save(any());
+        verify(productCachePort, never()).put(any());
     }
 }

@@ -49,6 +49,13 @@ public class ProductReactiveRepositoryAdapter extends ReactiveAdapterOperations<
     }
 
     @Override
+    public Mono<Product> findById(UUID id) {
+        return super.findById(id)
+                .onErrorMap(DataAccessException.class,
+                        error -> new RepositoryUnavailableException("Product repository is temporarily unavailable"));
+    }
+
+    @Override
     public Flux<Product> findAll() {
         return super.findAll()
                 .onErrorMap(DataAccessException.class,

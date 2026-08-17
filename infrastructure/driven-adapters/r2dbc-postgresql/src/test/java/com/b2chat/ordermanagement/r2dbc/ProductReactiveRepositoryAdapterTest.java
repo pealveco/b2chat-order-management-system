@@ -85,6 +85,45 @@ class ProductReactiveRepositoryAdapterTest {
     }
 
     @Test
+    void shouldFindProductById() {
+        var id = UUID.randomUUID();
+        when(repository.findById(id)).thenReturn(Mono.just(new ProductData(
+                id,
+                "Keyboard",
+                "Mechanical keyboard",
+                new BigDecimal("25.50"),
+                10
+        )));
+
+        StepVerifier.create(repositoryAdapter.findById(id))
+                .expectNextMatches(product -> product.getId().equals(id)
+                        && product.getName().equals("Keyboard")
+                        && product.getPrice().getAmount().equals(new BigDecimal("25.50"))
+                        && product.getStock().equals(10))
+                .verifyComplete();
+    }
+
+    @Test
+    void shouldReturnEmptyWhenProductDoesNotExist() {
+        var id = UUID.randomUUID();
+        when(repository.findById(id)).thenReturn(Mono.empty());
+
+        StepVerifier.create(repositoryAdapter.findById(id))
+                .verifyComplete();
+    }
+
+    @Test
+    void shouldMapPersistenceFailuresWhenFindingProductById() {
+        var id = UUID.randomUUID();
+        when(repository.findById(id))
+                .thenReturn(Mono.error(new DataAccessResourceFailureException("connection failed")));
+
+        StepVerifier.create(repositoryAdapter.findById(id))
+                .expectError(RepositoryUnavailableException.class)
+                .verify();
+    }
+
+    @Test
     void shouldMapPersistenceFailuresWhenFindingAllProducts() {
         when(repository.findAll())
                 .thenReturn(Flux.error(new DataAccessResourceFailureException("connection failed")));
