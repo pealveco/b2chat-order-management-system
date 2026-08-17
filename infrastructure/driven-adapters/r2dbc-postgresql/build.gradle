@@ -7,5 +7,7 @@ dependencies {
     implementation 'org.reactivecommons.utils:object-mapper-api:0.1.0'
 
     testImplementation 'org.reactivecommons.utils:object-mapper:0.1.0'
+    testImplementation 'org.testcontainers:junit-jupiter:1.21.4'
+    testImplementation 'org.testcontainers:testcontainers:1.21.4'
+    testRuntimeOnly 'org.postgresql:postgresql:42.7.11'
 }
-

@@ -120,6 +120,8 @@ WHERE id = :productId AND active = TRUE AND stock >= :quantity;
 
 Si el número de filas afectadas es 0, se interpreta como stock insuficiente y la operación se aborta.
 
+US-008 queda cubierta explícitamente con `ProductStockConcurrencyIntegrationTest`, que ejecuta descuentos concurrentes contra PostgreSQL vía Testcontainers y verifica que, cuando dos pedidos compiten por el último ítem, exactamente uno actualiza la fila y el otro falla sin dejar stock negativo.
+
 ### Estrategia de caché
 Actualmente se implementa **write-through** para productos: toda creación o actualización de producto persiste primero en Postgres y, si la persistencia confirma, escribe el producto en Redis con la clave `product:{id}` y registra el id en el set `products:all`. La eliminación usa soft delete en Postgres (`active=false`) y luego elimina la clave individual de Redis y remueve el id del set `products:all`.
 
@@ -151,7 +153,7 @@ Decisiones de alcance no especificadas explícitamente en el enunciado de la pru
 ## Testing
 
 - **Unitario:** casos de uso del dominio con puertos mockeados (JUnit 5 + Mockito + Reactor Test).
-- **Integración:** endpoints críticos (registro de usuario, creación de pedido, actualización de estado) contra instancias reales de PostgreSQL y Redis vía Testcontainers.
+- **Integración:** endpoints críticos y concurrencia de stock contra instancias reales de PostgreSQL/Redis vía Testcontainers o contenedores equivalentes.
 
 ```bash
 ./gradlew :model:test :usecase:test :r2dbc-postgresql:test :notification:test :reactive-web:test :app-service:classes

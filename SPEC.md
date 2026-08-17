@@ -588,6 +588,16 @@ WHERE id = :productId AND active = TRUE AND stock >= :quantity;
 -- Verificar rowsUpdated == 0 -> stock insuficiente -> abortar
 ```
 
+### 7.2 US-008 — Concurrencia de stock
+
+US-008 se implementa con el `UPDATE` condicional atómico anterior, usado desde `ProductReactiveRepository.decrementStockIfAvailable`. No se usa el patrón vulnerable `SELECT stock` → validar en código → `UPDATE`.
+
+La verificación explícita vive en `ProductStockConcurrencyIntegrationTest` y usa PostgreSQL real con Testcontainers:
+
+- stock inicial `1`, dos descuentos concurrentes de `1` unidad → exactamente un intento retorna éxito y el otro falla.
+- stock inicial `3`, diez descuentos concurrentes de `1` unidad → exactamente tres intentos retornan éxito, siete fallan y el stock final queda en `0`.
+- en ningún caso el stock puede quedar negativo por el `CHECK (stock >= 0)` y, principalmente, porque el `WHERE stock >= :quantity` hace que la actualización sea atómica a nivel de fila.
+
 ---
 
 ## 8. Estructura de claves Redis
@@ -657,7 +667,7 @@ Resumen de la decisión US-007:
 | Unitario | Todos los use cases de `domain/usecase`, con puertos mockeados | JUnit 5, Mockito, `StepVerifier` (Reactor Test) |
 | Entry point | Contratos HTTP, status codes, response envelope, error envelope y validaciones de request | `WebTestClient` |
 | Adapter | Mapeo de entidades, errores de persistencia y constraints | JUnit 5, Mockito, `StepVerifier` |
-| Integración | `POST /users` (incl. email duplicado), `POST /orders` (incl. stock insuficiente → 409), `PUT /orders/{id}/status` | `@SpringBootTest`, `WebTestClient`, Testcontainers (Postgres + Redis reales) |
+| Integración | `POST /users` (incl. email duplicado), `POST /orders` (incl. stock insuficiente → 409), US-008 concurrencia de stock, `PUT /orders/{id}/status` | `@SpringBootTest`, `WebTestClient`, Testcontainers (Postgres + Redis reales) |
 
 ---
 
