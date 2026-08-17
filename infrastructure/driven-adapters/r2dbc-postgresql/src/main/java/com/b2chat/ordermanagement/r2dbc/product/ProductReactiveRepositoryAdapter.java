@@ -8,6 +8,7 @@ import com.b2chat.ordermanagement.r2dbc.helper.ReactiveAdapterOperations;
 import org.reactivecommons.utils.ObjectMapper;
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Repository;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.UUID;
@@ -43,6 +44,13 @@ public class ProductReactiveRepositoryAdapter extends ReactiveAdapterOperations<
     @Override
     public Mono<Product> save(Product product) {
         return super.save(product)
+                .onErrorMap(DataAccessException.class,
+                        error -> new RepositoryUnavailableException("Product repository is temporarily unavailable"));
+    }
+
+    @Override
+    public Flux<Product> findAll() {
+        return super.findAll()
                 .onErrorMap(DataAccessException.class,
                         error -> new RepositoryUnavailableException("Product repository is temporarily unavailable"));
     }

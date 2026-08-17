@@ -4,6 +4,7 @@ import com.b2chat.ordermanagement.api.exception.InvalidRequestException;
 import com.b2chat.ordermanagement.api.response.ApiResponse;
 import com.b2chat.ordermanagement.api.validation.RequestValidator;
 import com.b2chat.ordermanagement.usecase.createproduct.CreateProductUseCase;
+import com.b2chat.ordermanagement.usecase.listproducts.ListProductsUseCase;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -18,6 +19,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class ProductHandler {
     private final CreateProductUseCase createProductUseCase;
+    private final ListProductsUseCase listProductsUseCase;
     private final RequestValidator requestValidator;
 
     public Mono<ServerResponse> create(ServerRequest serverRequest) {
@@ -36,5 +38,14 @@ public class ProductHandler {
                 .flatMap(product -> ServerResponse.created(URI.create("/products/" + product.getId()))
                         .contentType(MediaType.APPLICATION_JSON)
                         .bodyValue(ApiResponse.success(ProductResponse.from(product), serverRequest.path())));
+    }
+
+    public Mono<ServerResponse> list(ServerRequest serverRequest) {
+        return listProductsUseCase.execute()
+                .map(ProductResponse::from)
+                .collectList()
+                .flatMap(products -> ServerResponse.ok()
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .bodyValue(ApiResponse.success(products, serverRequest.path())));
     }
 }

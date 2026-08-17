@@ -11,6 +11,7 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.eq;
@@ -31,12 +32,14 @@ class ProductCacheAdapterTest {
                 new Money(new BigDecimal("25.50")), 10);
         var adapter = spy(new ProductCacheAdapter(connectionFactory, objectMapper));
 
-        doReturn(Mono.just(product)).when(adapter).save(eq("product:" + id), same(product));
+        doReturn(Mono.just(product)).when(adapter).saveProduct(same(product));
+        doReturn(Mono.just(1L)).when(adapter).indexProduct(same(product));
 
         StepVerifier.create(adapter.put(product))
                 .verifyComplete();
 
-        verify(adapter).save("product:" + id, product);
+        verify(adapter).saveProduct(product);
+        verify(adapter).indexProduct(product);
     }
 
     @Test
@@ -47,10 +50,49 @@ class ProductCacheAdapterTest {
         var adapter = spy(new ProductCacheAdapter(connectionFactory, objectMapper));
 
         doReturn(Mono.error(new DataAccessResourceFailureException("redis unavailable")))
-                .when(adapter).save(eq("product:" + id), same(product));
+                .when(adapter).saveProduct(same(product));
 
         StepVerifier.create(adapter.put(product))
                 .expectError(RepositoryUnavailableException.class)
                 .verify();
+    }
+
+    @Test
+    void shouldGetAllProductsFromCacheWhenIndexAndEntriesExist() {
+        var id = UUID.randomUUID();
+        var product = new Product(id, "Keyboard", "Mechanical keyboard",
+                new Money(new BigDecimal("25.50")), 10);
+        var adapter = spy(new ProductCacheAdapter(connectionFactory, objectMapper));
+
+        doReturn(reactor.core.publisher.Flux.fromIterable(List.of(id.toString())))
+                .when(adapter).findCachedProductIds();
+        doReturn(Mono.just(product)).when(adapter).findCachedProduct(eq(id.toString()));
+
+        StepVerifier.create(adapter.getAll())
+                .expectNext(product)
+                .verifyComplete();
+    }
+
+    @Test
+    void shouldReturnEmptyWhenCacheIndexIsEmpty() {
+        var adapter = spy(new ProductCacheAdapter(connectionFactory, objectMapper));
+
+        doReturn(reactor.core.publisher.Flux.empty()).when(adapter).findCachedProductIds();
+
+        StepVerifier.create(adapter.getAll())
+                .verifyComplete();
+    }
+
+    @Test
+    void shouldReturnEmptyWhenCacheIndexHasMissingProductEntries() {
+        var id = UUID.randomUUID();
+        var adapter = spy(new ProductCacheAdapter(connectionFactory, objectMapper));
+
+        doReturn(reactor.core.publisher.Flux.fromIterable(List.of(id.toString())))
+                .when(adapter).findCachedProductIds();
+        doReturn(Mono.empty()).when(adapter).findCachedProduct(eq(id.toString()));
+
+        StepVerifier.create(adapter.getAll())
+                .verifyComplete();
     }
 }

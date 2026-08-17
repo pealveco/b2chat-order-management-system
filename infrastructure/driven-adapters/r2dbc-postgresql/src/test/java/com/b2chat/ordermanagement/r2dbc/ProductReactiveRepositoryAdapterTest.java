@@ -13,6 +13,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.reactivecommons.utils.ObjectMapper;
 import org.springframework.dao.DataAccessResourceFailureException;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -60,6 +61,35 @@ class ProductReactiveRepositoryAdapterTest {
                 .thenReturn(Mono.error(new DataAccessResourceFailureException("connection failed")));
 
         StepVerifier.create(repositoryAdapter.save(product))
+                .expectError(RepositoryUnavailableException.class)
+                .verify();
+    }
+
+    @Test
+    void shouldFindAllProducts() {
+        var id = UUID.randomUUID();
+        when(repository.findAll()).thenReturn(Flux.just(new ProductData(
+                id,
+                "Keyboard",
+                "Mechanical keyboard",
+                new BigDecimal("25.50"),
+                10
+        )));
+
+        StepVerifier.create(repositoryAdapter.findAll())
+                .expectNextMatches(product -> product.getId().equals(id)
+                        && product.getName().equals("Keyboard")
+                        && product.getPrice().getAmount().equals(new BigDecimal("25.50"))
+                        && product.getStock().equals(10))
+                .verifyComplete();
+    }
+
+    @Test
+    void shouldMapPersistenceFailuresWhenFindingAllProducts() {
+        when(repository.findAll())
+                .thenReturn(Flux.error(new DataAccessResourceFailureException("connection failed")));
+
+        StepVerifier.create(repositoryAdapter.findAll())
                 .expectError(RepositoryUnavailableException.class)
                 .verify();
     }

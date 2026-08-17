@@ -11,7 +11,7 @@ Backend de un sistema simplificado de gestión de pedidos de e-commerce, desarro
 - **Lenguaje:** Java 21
 - **Framework:** Spring Boot (WebFlux — programación reactiva)
 - **Persistencia:** PostgreSQL vía R2DBC
-- **Cache:** Redis (write-through implementado; read-through planeado para consultas de catálogo)
+- **Cache:** Redis (write-through + read-through fallback para catálogo)
 - **Seguridad:** JWT
 - **Arquitectura:** Clean Architecture — [Scaffold Bancolombia](https://bancolombia.github.io/scaffold-clean-architecture/)
 - **Contenedores:** Docker / Docker Compose
@@ -83,7 +83,7 @@ Backlog completo de historias de usuario y criterios de aceptación en [`docs/BA
 | Método | Endpoint | Descripción |
 |---|---|---|
 | `POST` | `/products` | Registrar un nuevo producto *(implementado)* |
-| `GET` | `/products` | Listar catálogo de productos *(planeado)* |
+| `GET` | `/products` | Listar catálogo de productos *(implementado)* |
 | `PUT` | `/products/{id}` | Actualizar un producto *(planeado)* |
 | `DELETE` | `/products/{id}` | Eliminar un producto (soft delete) *(planeado)* |
 
@@ -121,9 +121,9 @@ WHERE id = :productId AND stock >= :quantity;
 Si el número de filas afectadas es 0, se interpreta como stock insuficiente y la operación se aborta.
 
 ### Estrategia de caché
-Actualmente se implementa **write-through** para productos: toda creación de producto persiste primero en Postgres y, si la persistencia confirma, escribe el producto en Redis con la clave `product:{id}` dentro del mismo caso de uso.
+Actualmente se implementa **write-through** para productos: toda creación de producto persiste primero en Postgres y, si la persistencia confirma, escribe el producto en Redis con la clave `product:{id}` y registra el id en el set `products:all`.
 
-La consulta de catálogo se implementará con **read-through fallback** cuando exista `GET /products`: ante un miss real — cache frío en el arranque, TTL expirado o evicción — se leerá desde Postgres, se responderá al cliente y se repoblará Redis.
+La consulta de catálogo (`GET /products`) implementa **read-through fallback**: primero intenta reconstruir la lista desde Redis usando `products:all`; ante un miss real — cache frío en el arranque, entrada incompleta, TTL expirado o evicción — lee desde Postgres, responde al cliente y repuebla Redis para futuras lecturas.
 
 Para un entorno de mayor tráfico, el diseño completo evolucionaría a incluir TTL con jitter (para evitar expiración simultánea de claves y *thundering herd*) y un job de *refresh-ahead* que renueve proactivamente las claves antes de vencer. Esto queda documentado como evolución natural del diseño — ver [Assumptions](#assumptions).
 
@@ -136,7 +136,7 @@ Este proyecto se desarrolló usando **Claude Code** bajo un enfoque de Spec-Driv
 
 Decisiones de alcance no especificadas explícitamente en el enunciado de la prueba técnica:
 
-1. **Caching:** write-through implementado para escrituras de producto. Read-through fallback se agregará con las consultas de catálogo. TTL con jitter y job de refresh-ahead quedan documentados como evolución productiva.
+1. **Caching:** write-through implementado para escrituras de producto y read-through fallback implementado para catálogo. TTL con jitter y job de refresh-ahead quedan documentados como evolución productiva.
 2. **Notificaciones:** simuladas en memoria con un patrón productor/consumidor reactivo, representando el mismo principio de desacople que se usaría en producción con AWS SQS/SNS o EventBridge.
 3. **Eliminación de productos:** soft delete (`active=false`) en lugar de DELETE físico, para preservar integridad referencial con pedidos históricos.
 4. **Cancelación de pedidos:** al cancelar un pedido, se repone automáticamente el stock descontado.

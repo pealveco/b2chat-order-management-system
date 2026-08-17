@@ -7,6 +7,7 @@ import com.b2chat.ordermanagement.model.product.Product;
 import com.b2chat.ordermanagement.model.product.gateways.ProductCachePort;
 import com.b2chat.ordermanagement.model.product.gateways.ProductRepository;
 import com.b2chat.ordermanagement.usecase.createproduct.CreateProductUseCase;
+import com.b2chat.ordermanagement.usecase.listproducts.ListProductsUseCase;
 import jakarta.validation.Validation;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -14,9 +15,12 @@ import org.mockito.Mockito;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.reactive.function.server.HandlerStrategies;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import tools.jackson.databind.ObjectMapper;
 
+import java.math.BigDecimal;
+import java.util.List;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -34,8 +38,9 @@ class ProductRouterRestTest {
         productRepository = Mockito.mock(ProductRepository.class);
         productCachePort = Mockito.mock(ProductCachePort.class);
         var createProductUseCase = new CreateProductUseCase(productRepository, productCachePort);
+        var listProductsUseCase = new ListProductsUseCase(productRepository, productCachePort);
         var validator = Validation.buildDefaultValidatorFactory().getValidator();
-        var handler = new ProductHandler(createProductUseCase, new RequestValidator(validator));
+        var handler = new ProductHandler(createProductUseCase, listProductsUseCase, new RequestValidator(validator));
         var router = new ProductRouterRest().productRoutes(handler);
         var handlerStrategies = HandlerStrategies.builder()
                 .exceptionHandler(new GlobalErrorWebExceptionHandler(new ObjectMapper()))
@@ -204,5 +209,64 @@ class ProductRouterRestTest {
                 .jsonPath("$.error.code").isEqualTo("SERVICE_UNAVAILABLE")
                 .jsonPath("$.error.message").isEqualTo("Product cache is temporarily unavailable")
                 .jsonPath("$.error.status").isEqualTo(503);
+    }
+
+    @Test
+    void shouldListProductsFromCache() {
+        var product = new Product(new UUID(1L, 1L), "Keyboard", "Mechanical keyboard",
+                new com.b2chat.ordermanagement.model.money.Money(new BigDecimal("25.50")), 10);
+        when(productCachePort.getAll()).thenReturn(Flux.just(product));
+
+        webTestClient.get()
+                .uri("/products")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.data[0].id").isEqualTo(product.getId().toString())
+                .jsonPath("$.data[0].name").isEqualTo("Keyboard")
+                .jsonPath("$.data[0].description").isEqualTo("Mechanical keyboard")
+                .jsonPath("$.data[0].price").isEqualTo(25.50)
+                .jsonPath("$.data[0].stock").isEqualTo(10)
+                .jsonPath("$.meta.path").isEqualTo("/products")
+                .jsonPath("$.meta.timestamp").exists();
+
+        verify(productRepository, never()).findAll();
+    }
+
+    @Test
+    void shouldListProductsFromRepositoryAndPopulateCacheWhenCacheIsEmpty() {
+        var products = List.of(new Product(new UUID(1L, 1L), "Keyboard", "Mechanical keyboard",
+                new com.b2chat.ordermanagement.model.money.Money(new BigDecimal("25.50")), 10));
+        when(productCachePort.getAll()).thenReturn(Flux.empty());
+        when(productRepository.findAll()).thenReturn(Flux.fromIterable(products));
+        when(productCachePort.putAll(products)).thenReturn(Mono.empty());
+
+        webTestClient.get()
+                .uri("/products")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.data[0].id").isEqualTo(products.getFirst().getId().toString())
+                .jsonPath("$.data[0].name").isEqualTo("Keyboard")
+                .jsonPath("$.meta.path").isEqualTo("/products");
+
+        verify(productRepository).findAll();
+        verify(productCachePort).putAll(products);
+    }
+
+    @Test
+    void shouldReturnEmptyListWhenNoProductsExist() {
+        when(productCachePort.getAll()).thenReturn(Flux.empty());
+        when(productRepository.findAll()).thenReturn(Flux.empty());
+        when(productCachePort.putAll(List.of())).thenReturn(Mono.empty());
+
+        webTestClient.get()
+                .uri("/products")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.data").isArray()
+                .jsonPath("$.data.length()").isEqualTo(0)
+                .jsonPath("$.meta.path").isEqualTo("/products");
     }
 }

@@ -337,7 +337,27 @@ Respuestas mínimas profesionales cubiertas para `POST /users`:
 
 US-003 usa write-through secuencial dentro de `CreateProductUseCase`: primero guarda en Postgres mediante `ProductRepository`; si la persistencia confirma, escribe el mismo producto en Redis mediante `ProductCachePort` con la clave `product:{id}`. Si falla Postgres o Redis, la API responde `503 Service Unavailable` con el envelope estándar de error.
 
-**`GET /products`** → `200`, array de productos (desde cache si está disponible).
+**`GET /products`**
+```json
+// Response 200
+{
+  "data": [
+    {
+      "id": "uuid",
+      "name": "Mouse inalámbrico",
+      "description": "...",
+      "price": 25000,
+      "stock": 100
+    }
+  ],
+  "meta": {
+    "path": "/products",
+    "timestamp": "2026-08-16T00:00:00Z"
+  }
+}
+```
+
+US-004 usa read-through fallback dentro de `ListProductsUseCase`: intenta leer Redis por `products:all` + `product:{id}`; si Redis está vacío, incompleto o no disponible para lectura, lee Postgres. Cuando lee Postgres, intenta repoblar Redis sin fallar la request si la repoblación de cache falla. Si Postgres no tiene productos, responde `200 OK` con `data: []`.
 
 **`PUT /products/{id}`** → mismo body que POST, `200` actualizado, `404` si no existe.
 
@@ -515,16 +535,16 @@ WHERE id = :productId AND stock >= :quantity;
 
 ```
 product:{productId}   -> JSON serializado del producto {id, name, description, price, stock}
-products:all          -> Futuro índice de productId activos para listado read-through
+products:all          -> Set de productId usados para reconstruir el listado sin KEYS *
 ```
 
-US-003 solo escribe `product:{id}` con `ReactiveRedisTemplate`. `GET /products` combinará read-through: consultar Redis primero; si la entrada individual o el índice de catálogo no existe, leer Postgres, responder y repoblar Redis.
+US-003 escribe `product:{id}` y registra el id en `products:all`. US-004 combina read-through: consultar Redis primero; si la entrada individual o el índice de catálogo no existe o está incompleto, leer Postgres, responder y repoblar Redis.
 
 TTL recomendado para catálogo:
 
 - Usar TTL en productos individuales para evitar datos indefinidamente obsoletos.
 - Aplicar TTLs escalonados con jitter, por ejemplo 10-15 minutos por producto, para evitar expiración masiva simultánea.
-- Cuando exista listado/read-through, evaluar un job programado que refresque claves cercanas a expirar desde Postgres. Ese job no reemplaza la fuente de verdad; solo reduce misses y latencia.
+- Evaluar un job programado que refresque claves cercanas a expirar desde Postgres. Ese job no reemplaza la fuente de verdad; solo reduce misses y latencia.
 - En escrituras (`POST`, futuro `PUT`, futuro `DELETE`) mantener write-through/evict para que los cambios importantes actualicen o invaliden cache inmediatamente.
 
 ---
