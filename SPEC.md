@@ -1,7 +1,7 @@
 # SPEC.md — B2Chat Order Management System
 
 > Fuente de verdad técnica para el desarrollo asistido por Claude Code y Codex bajo enfoque Spec-Driven Development (SDD).
-> El backlog (`B2Chat_Backlog_Prueba_Tecnica.md`) define el QUÉ (historias + criterios de aceptación).
+> El backlog (`docs/BACKLOG.md`) define el QUÉ (historias + criterios de aceptación).
 > Este documento define el CÓMO (contratos, modelo de datos, estructura exacta de módulos, decisiones de arquitectura).
 
 **Repositorio:** `b2chat-order-management-system`
@@ -26,7 +26,7 @@ b2chat-order-management-system/
 
 ---
 
-## 2. Módulos de infraestructura a generar
+## 2. Módulos de infraestructura
 
 Usar las tareas del scaffold (`Generate Driven Adapter` / `Generate Entry Point`) para mantener consistencia de convenciones. Módulos requeridos:
 
@@ -36,8 +36,6 @@ Usar las tareas del scaffold (`Generate Driven Adapter` / `Generate Entry Point`
 | `infrastructure/driven-adapters/redis` | Driven adapter | Cache write-through + read-through del catálogo de productos. Incluye `RedisConnectionWarmupConfig`, que fuerza la apertura de la conexión reactiva compartida durante el arranque (ver §11.1) |
 | `infrastructure/driven-adapters/notification` | Driven adapter genérico del scaffold | Publisher/listener de eventos `OrderPlacedEvent`, simula envío de notificación de recepción (log estructurado) |
 | `infrastructure/entry-points/reactive-web` | Entry point | Handlers/Routers funcionales WebFlux + filtro de seguridad JWT |
-
-**Nota:** confirmar contra `gradle generateDrivenAdapter` (listado de tipos disponibles) que `r2dbc` y `redis` estén soportados como tipos nativos del scaffold antes de generarlos — si el nombre exacto de la tarea difiere, ajustar aquí y no asumir.
 
 ---
 
@@ -191,7 +189,9 @@ public interface TransactionPort {
 
 ---
 
-## 6. Contratos de API (`infrastructure/entry-points/reactive-web`)
+## 6. Contratos de API
+
+Implementados en `infrastructure/entry-points/reactive-web`.
 
 ### 6.0 Convenciones HTTP
 
@@ -273,7 +273,7 @@ Validación:
 }
 ```
 
-Respuestas mínimas profesionales cubiertas para `POST /users`:
+Códigos de respuesta cubiertos para `POST /users`:
 
 | Status | Caso |
 |---|---|
@@ -422,7 +422,7 @@ US-006 usa soft delete por regla de negocio: no elimina físicamente el registro
 }
 ```
 
-Respuestas mínimas profesionales cubiertas para `POST /orders`:
+Códigos de respuesta cubiertos para `POST /orders`:
 
 | Status | Caso |
 |---|---|
@@ -469,7 +469,7 @@ Respuestas mínimas profesionales cubiertas para `POST /orders`:
 }
 ```
 
-Respuestas mínimas profesionales cubiertas para `GET /orders/{id}`:
+Códigos de respuesta cubiertos para `GET /orders/{id}`:
 
 | Status | Caso |
 |---|---|
@@ -506,7 +506,7 @@ Respuestas mínimas profesionales cubiertas para `GET /orders/{id}`:
 }
 ```
 
-Respuestas mínimas profesionales cubiertas para `PUT /orders/{id}/status`:
+Códigos de respuesta cubiertos para `PUT /orders/{id}/status`:
 
 | Status | Caso |
 |---|---|
@@ -535,7 +535,7 @@ Respuestas mínimas profesionales cubiertas para `PUT /orders/{id}/status`:
 }
 ```
 
-Respuestas mínimas profesionales cubiertas para `GET /users/{id}/orders`:
+Códigos de respuesta cubiertos para `GET /users/{id}/orders`:
 
 | Status | Caso |
 |---|---|
@@ -599,7 +599,7 @@ Matriz de autenticación actual:
 
 ## 7. Modelo de datos (PostgreSQL — DDL de referencia)
 
-Durante esta fase, el schema local y los datos mínimos esenciales para probar HUs se centralizan en:
+El schema local y los datos mínimos necesarios para probar las HUs se centralizan en:
 
 ```text
 infrastructure/driven-adapters/r2dbc-postgresql/src/main/resources/r2dbc-schema.sql
@@ -628,7 +628,7 @@ Cuando el proyecto requiera migraciones formales, mover:
 
 ### 7.1 Jerarquía para consultas R2DBC
 
-Para mantener consistencia profesional en los adapters de persistencia, usar esta jerarquía:
+Para mantener consistencia en los adapters de persistencia, se usa esta jerarquía:
 
 1. **Query methods derivados**
 
@@ -781,15 +781,15 @@ public void publishOrderCompleted(OrderCompletedEvent event) {
 
 En producción, este `Sinks.Many` se reemplazaría por un publisher real hacia AWS SQS/SNS o EventBridge — el principio de desacople (responder rápido, notificar aparte) es el mismo.
 
-Si queda tiempo dentro de la prueba técnica, se puede evolucionar la simulación en memoria hacia una cola local con LocalStack. La opción preferida sería SQS cuando se quiera demostrar cola durable, mensajes pendientes, retries y consumo explícito; SNS aplica mejor si se quiere demostrar fan-out/publicación a varios suscriptores. Para US-007 actual, SQS local sería la alternativa más cercana a "pedido recibido → mensaje encolado → listener lo consume".
+Evolución productiva recomendada: reemplazar la simulación en memoria por una cola local con LocalStack. SQS es la opción más cercana al patrón actual ("pedido recibido → mensaje encolado → listener lo consume") y permite demostrar cola durable, mensajes pendientes, retries y consumo explícito; SNS aplica mejor si se busca fan-out hacia varios suscriptores. No se implementa por alcance de esta prueba.
 
 Resumen de la decisión US-007:
 
 - `OrderPlacedEvent` representa el hecho de dominio "pedido recibido/creado".
-- `Sinks.Many<OrderPlacedEvent>` funcionará como bus de eventos en memoria para la prueba técnica.
-- `OrderEventPublisher` publicará el evento después de persistir la orden.
-- `OrderEventListener` escuchará el flujo y simulará la notificación con log estructurado.
-- No se usará otro microservicio ni AWS real en el alcance base de esta prueba; si se extiende el alcance, LocalStack SQS sería el siguiente paso recomendado para visualizar mensajes encolados localmente.
+- `Sinks.Many<OrderPlacedEvent>` funciona como bus de eventos en memoria.
+- `OrderEventPublisher` publica el evento después de persistir la orden.
+- `OrderEventListener` escucha el flujo y simula la notificación con log estructurado.
+- No se usa otro microservicio ni AWS real por alcance de esta prueba; LocalStack SQS es el siguiente paso recomendado para una evolución que visualice mensajes encolados localmente.
 
 ---
 
@@ -801,7 +801,7 @@ Resumen de la decisión US-007:
 - `POST /auth/token` queda público para emitir el JWT simplificado.
 - Los `GET` quedan públicos salvo que una HU indique lo contrario.
 - Escrituras sin token o con token inválido retornan `401 Unauthorized` con el envelope estándar de error.
-- Secret de firma vía variable de entorno (`JWT_SECRET`), nunca hardcoded — coherente con buenas prácticas ya aplicadas en tu experiencia (Cognito/OAuth2 en AB InBev).
+- Secret de firma vía variable de entorno (`JWT_SECRET`), nunca hardcoded.
 - `JWT_SECRET` debe tener mínimo 32 bytes para cumplir con `HS256`.
 - El enunciado no define password ni credenciales; por alcance, se valida que el usuario exista por `userId` o `email` y se emite token. En producción esto debería reemplazarse por un flujo de autenticación real o IdP externo.
 
@@ -888,7 +888,9 @@ Nota: el build de la imagen genera el artefacto ejecutable. La ejecución comple
 
 ---
 
-## 13. Orden de implementación recomendado
+## 13. Orden de implementación
+
+Orden seguido durante el desarrollo:
 
 1. `domain/model` — entidades, value objects, `OrderStatus` con transiciones
 2. `domain/usecase` — puertos (interfaces) + casos de uso de Usuarios y Productos primero (más simples, validan que el scaffold responde)
@@ -899,7 +901,7 @@ Nota: el build de la imagen genera el artefacto ejecutable. La ejecución comple
 7. `infrastructure/driven-adapters/notification` — mecanismo de eventos
 8. Seguridad JWT
 9. Docker
-10. Testing (idealmente en paralelo a cada paso anterior, no todo al final)
+10. Testing, en paralelo a cada paso anterior, no todo al final
 11. README final con assumptions + development approach
 
 ---

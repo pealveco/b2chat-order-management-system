@@ -2,7 +2,7 @@
 
 Backend de un sistema simplificado de gestión de pedidos de e-commerce, desarrollado como prueba técnica para el proceso de selección de Backend Developer en B2Chat.
 
-**Estado del proyecto:** 🚧 En desarrollo — este README se actualiza progresivamente a medida que avanza la implementación.
+**Estado del proyecto:** ✅ Completo — todos los requisitos y los 4 bonus del enunciado están implementados.
 
 ---
 
@@ -298,12 +298,7 @@ Cuando `POST /orders` descuenta stock, refresca en Redis las claves de los produ
 Para un entorno de mayor tráfico, el diseño completo evolucionaría a incluir TTL con jitter (para evitar expiración simultánea de claves y *thundering herd*) y un job de *refresh-ahead* que renueve proactivamente las claves antes de vencer. Esto queda documentado como evolución natural del diseño — ver [Assumptions](#assumptions).
 
 ### Hallazgos de las pruebas de integración (BlockHound)
-Las pruebas de integración end-to-end (US-015) levantan el contexto completo de Spring Boot contra Postgres y Redis reales. Al hacerlo por primera vez con `blockhound-junit-platform` activo (ya presente en el proyecto para detectar llamadas bloqueantes en hilos reactivos), aparecieron dos blocking calls reales en producción que ningún test anterior ejercitaba, porque ninguno combinaba contexto completo + servicios reales + BlockHound simultáneamente:
-
-1. **`R2dbcSchemaInitializerConfig`** leía el `.sql` del classpath (`ClassPathResource`) de forma perezosa dentro del pipeline reactivo, en el hilo Netty del driver R2DBC. Se corrigió leyendo el recurso a memoria (`ByteArrayResource`) de forma *eager*, en el hilo normal de creación del bean, antes de construir la cadena reactiva.
-2. La conexión reactiva compartida de Redis (Lettuce) se abre, por diseño de Spring Data Redis, de forma perezosa **y bloqueante** (`CompletableFuture#get()`) en la primera operación reactiva real, en lugar de durante el arranque. Se agregó `RedisConnectionWarmupConfig` (`ApplicationRunner` en el módulo `redis`) que fuerza esa conexión durante el startup, antes de que el servidor acepte tráfico.
-
-Ninguno de los dos cambia comportamiento observable de la API; ambos eliminan un riesgo real de saturar el event-loop bajo carga en un arranque en frío. Es un buen ejemplo de por qué US-015 pide explícitamente instancias reales y no mocks: el problema es invisible en pruebas unitarias o con dobles de prueba.
+Las pruebas end-to-end de US-015, al ejecutarse por primera vez con contexto completo + servicios reales + BlockHound activo, revelaron dos llamadas bloqueantes preexistentes en hilos reactivos (lectura del schema SQL, apertura de la conexión reactiva de Redis). Ambas se corrigieron sin cambiar comportamiento observable de la API — detalle técnico en [SPEC.md §11.1](./SPEC.md#111-hallazgos-blocking-calls-detectados-por-blockhound).
 
 ### Desarrollo asistido por IA (Spec-Driven Development)
 Este proyecto se desarrolló usando **Claude Code** y **Codex** bajo un enfoque de Spec-Driven Development (SDD): definición de backlog (historias de usuario + criterios de aceptación) → especificación técnica (`SPEC.md`, contratos de API, modelo de datos, decisiones de arquitectura) → implementación guiada por esa especificación → validación de estructura con `./gradlew vs` del scaffold Bancolombia. Este proceso se mantuvo documentado y versionado a lo largo del desarrollo, no aplicado de forma ad-hoc.

@@ -24,7 +24,7 @@
 - `infrastructure/driven-adapters/r2dbc-postgresql`: tabla `users` (id UUID PK, email UNIQUE, name, address).
 - Unicidad de email: constraint UNIQUE en BD + manejo de `DataIntegrityViolationException` mapeado a 409.
 
-**Prioridad:** Alta | **Estimado:** 3 pts
+**Prioridad:** Alta
 
 ---
 
@@ -40,7 +40,7 @@
 - `domain/usecase`: `GetUserUseCase`.
 - Reutiliza el mismo `UserRepository` (puerto de dominio) que US-001.
 
-**Prioridad:** Alta | **Estimado:** 1 pt
+**Prioridad:** Alta
 
 ---
 
@@ -63,7 +63,7 @@
 - `domain/model`: `Product` (id, name, description, `Money` price, stock).
 - `domain/usecase`: `CreateProductUseCase` — orquesta puerto `ProductRepository` (Postgres) + puerto `ProductCachePort` (Redis), ambos como dependencias inyectadas del use case, no acopladas entre sí.
 
-**Prioridad:** Alta | **Estimado:** 3 pts
+**Prioridad:** Alta
 
 ---
 
@@ -80,7 +80,7 @@
 - `infrastructure/driven-adapters/redis`: estructura recomendada — Hash o String serializado por producto (`product:{id}`) + Set `products:all` con los IDs, para poder reconstruir la lista sin `KEYS *` (antipatrón en Redis productivo).
 - TTL con jitter (ej. 1h ± unos minutos aleatorios por clave) solo como red de seguridad ante evicción por memoria, no como mecanismo principal de frescura — la frescura la garantiza el write-through.
 
-**Estrategia de caché — análisis completo (para discutir en la sesión técnica):**
+**Estrategia de caché — análisis completo:**
 
 Write-through resuelve consistencia en escritura, pero no disponibilidad del dato en cache ante: (1) cache frío / miss real (arranque, Redis reiniciado, dato nunca escrito), y (2) evicción por TTL o política de memoria (ej. `allkeys-lru`). El diseño completo para un entorno productivo de alto tráfico combina 4 capas:
 
@@ -93,7 +93,7 @@ Write-through resuelve consistencia en escritura, pero no disponibilidad del dat
 
 **Decisión de alcance para esta prueba:** se implementan write-through + read-through fallback (suficiente para demostrar consistencia y disponibilidad correctas). TTL con jitter + job de refresh-ahead **no se implementan** por alcance/tiempo del ejercicio, pero se documentan explícitamente en el README como la evolución natural del diseño para un entorno de mayor tráfico — ver Assumption #7.
 
-**Prioridad:** Alta | **Estimado:** 5 pts
+**Prioridad:** Alta
 
 ---
 
@@ -110,7 +110,7 @@ Write-through resuelve consistencia en escritura, pero no disponibilidad del dat
 - `domain/usecase`: `UpdateProductUseCase`.
 - Importante: la escritura a Redis debe ocurrir **después** de confirmar la escritura en Postgres (orden secuencial dentro del flujo reactivo), no en paralelo — si Postgres falla, Redis no debe actualizarse con datos que no llegaron a persistir.
 
-**Prioridad:** Media | **Estimado:** 2 pts
+**Prioridad:** Media
 
 ---
 
@@ -125,9 +125,9 @@ Write-through resuelve consistencia en escritura, pero no disponibilidad del dat
 
 **Notas técnicas:**
 - `domain/usecase`: `DeleteProductUseCase`.
-- Considerar regla de negocio (asumption a documentar): ¿se permite eliminar un producto con pedidos históricos asociados? → Recomendación: soft delete (flag `active=false`) en vez de DELETE físico, para no romper integridad referencial con `order_items`. **Documentar esta decisión como assumption.**
+- **Assumption a documentar:** ¿se permite eliminar un producto con pedidos históricos asociados? → Recomendación: soft delete (flag `active=false`) en vez de DELETE físico, para no romper integridad referencial con `order_items`.
 
-**Prioridad:** Media | **Estimado:** 2 pts
+**Prioridad:** Media
 
 ---
 
@@ -154,7 +154,7 @@ Write-through resuelve consistencia en escritura, pero no disponibilidad del dat
 - `infrastructure/driven-adapters/notification` (adapter custom, no viene en el scaffold por defecto): `OrderEventListener` suscrito al `Sinks.Many<OrderPlacedEvent>`.
 - **Assumption a documentar:** en producción este patrón se reemplazaría por AWS SQS/SNS o EventBridge — aquí se simula en memoria dado el alcance de la prueba, manteniendo el mismo principio de desacople entre "confirmar la operación" y "notificar el resultado".
 
-**Prioridad:** Alta (crítica) | **Estimado:** 8 pts
+**Prioridad:** Alta (crítica)
 
 ---
 
@@ -168,9 +168,8 @@ Write-through resuelve consistencia en escritura, pero no disponibilidad del dat
 **Notas técnicas:**
 - **No usar patrón leer-luego-escribir** (`SELECT stock` → validar en código → `UPDATE`), es vulnerable a race conditions incluso en R2DBC.
 - Usar **UPDATE condicional atómico** a nivel de query: `UPDATE products SET stock = stock - :qty WHERE id = :id AND stock >= :qty`, y verificar el número de filas afectadas (`rowsUpdated == 0` → stock insuficiente → abortar y responder 409).
-- Este es un punto que vale la pena mencionar explícitamente en la sesión técnica con B2Chat, incluso si no preguntan — demuestra criterio senior en concurrencia.
 
-**Prioridad:** Alta (crítica) | **Estimado:** 3 pts (puede integrarse dentro de US-007, listado aparte por su importancia técnica)
+**Prioridad:** Alta (crítica) — listado aparte de US-007 por su importancia técnica.
 
 ---
 
@@ -185,7 +184,7 @@ Write-through resuelve consistencia en escritura, pero no disponibilidad del dat
 - `domain/usecase`: `GetOrderUseCase`.
 - Requiere join reactivo entre `orders` y `order_items` (y opcionalmente `products` para enriquecer con nombre/precio al momento de la consulta).
 
-**Prioridad:** Alta | **Estimado:** 2 pts
+**Prioridad:** Alta
 
 ---
 
@@ -203,7 +202,7 @@ Write-through resuelve consistencia en escritura, pero no disponibilidad del dat
 - `domain/usecase`: `UpdateOrderStatusUseCase`.
 - Modelar las transiciones válidas explícitamente en el dominio (ej. un método `OrderStatus.canTransitionTo(newStatus)`), no dejarlo como validación ad-hoc en el use case.
 
-**Prioridad:** Alta | **Estimado:** 3 pts
+**Prioridad:** Alta
 
 ---
 
@@ -217,9 +216,9 @@ Write-through resuelve consistencia en escritura, pero no disponibilidad del dat
 
 **Notas técnicas:**
 - `domain/usecase`: `GetUserOrdersUseCase`.
-- Evaluar paginación si el alcance del ejercicio lo justifica (probablemente no es necesario para esta prueba, pero vale mencionarlo como posible mejora futura en el README).
+- Fuera de alcance para esta prueba: paginación. Documentada como mejora futura en el README.
 
-**Prioridad:** Media (Bonus) | **Estimado:** 3 pts
+**Prioridad:** Media (Bonus)
 
 ---
 
@@ -241,7 +240,7 @@ Write-through resuelve consistencia en escritura, pero no disponibilidad del dat
 - `infrastructure/entry-points/reactive-web`: `SecurityWebFilterChain` con `ReactiveJwtDecoder` o filtro custom si se prefiere no traer todo Spring Security OAuth2 Resource Server por simplicidad.
 - Librería sugerida: `io.jsonwebtoken:jjwt` para firmar/validar si se opta por implementación manual ligera.
 
-**Prioridad:** Media (Bonus) | **Estimado:** 5 pts
+**Prioridad:** Media (Bonus)
 
 ---
 
@@ -263,7 +262,7 @@ Write-through resuelve consistencia en escritura, pero no disponibilidad del dat
 - `Dockerfile` multi-stage: stage de build con Gradle (`./gradlew build`), stage final solo con el JAR sobre una imagen JRE liviana (ej. `eclipse-temurin:21-jre-alpine`).
 - `docker-compose.yml` con healthchecks para Postgres/Redis antes de levantar `app` (evita fallos de arranque por orden de servicios).
 
-**Prioridad:** Media (Bonus) | **Estimado:** 3 pts
+**Prioridad:** Media (Bonus)
 
 ---
 
@@ -283,7 +282,7 @@ Write-through resuelve consistencia en escritura, pero no disponibilidad del dat
 **Notas técnicas:**
 - JUnit 5 + Mockito + `StepVerifier` (Reactor Test) para validar flujos reactivos (`Mono`/`Flux`).
 
-**Prioridad:** Alta | **Estimado:** 5 pts
+**Prioridad:** Alta
 
 ---
 
@@ -298,7 +297,7 @@ Write-through resuelve consistencia en escritura, pero no disponibilidad del dat
 - `Testcontainers` con contenedores de PostgreSQL y Redis — evita depender de servicios locales instalados manualmente y es reproducible en cualquier máquina/CI.
 - `WebTestClient` (WebFlux) para probar los entry-points reactivos.
 
-**Prioridad:** Alta | **Estimado:** 5 pts
+**Prioridad:** Alta
 
 ---
 
@@ -318,17 +317,17 @@ Write-through resuelve consistencia en escritura, pero no disponibilidad del dat
 - Sección breve de **Development approach**, uso de Claude Code y Codex bajo un enfoque spec-driven (spec → arquitectura → implementación → validación de estructura con `./gradlew vs` del scaffold Bancolombia) — alineado con el requisito diferenciador.
 - Sección de **Production considerations** (o dentro de Assumptions): explicar el diseño completo de caché (write-through + read-through implementados; TTL con jitter + job de refresh-ahead como evolución no implementada por alcance) — ver Assumption #7. No dejarlo implícito en el código; el evaluador debe ver que la decisión fue consciente, no una omisión.
 
-**Prioridad:** Alta | **Estimado:** 2 pts
+**Prioridad:** Alta
 
 ---
 
 ## Assumptions consolidadas (a mantener actualizadas durante el desarrollo)
 
-> Esta sección se irá completando a medida que avancemos — cada decisión de diseño no especificada explícitamente en el enunciado debe quedar registrada aquí y trasladarse al README final.
+> Cada decisión de diseño no especificada explícitamente en el enunciado queda registrada aquí y trasladada al README final.
 
 1. **Caching:** se usa estrategia *write-through* (no cache-aside) para el catálogo de productos, garantizando que Redis nunca sirva datos desactualizados — toda escritura de producto actualiza Postgres y Redis en la misma operación.
 2. **Notificaciones:** se simulan en memoria con un patrón productor/consumidor reactivo (`Sinks.Many`), representando el mismo principio de desacople que se usaría en producción con AWS SQS/SNS o EventBridge.
-3. **Eliminación de productos:** se implementa soft delete (`active=false`) en lugar de DELETE físico, para preservar integridad referencial con pedidos históricos. *(Pendiente de confirmar si se implementa así o se documenta como alternativa considerada.)*
+3. **Eliminación de productos:** se implementa soft delete (`active=false`) en lugar de DELETE físico, para preservar integridad referencial con pedidos históricos.
 4. **Cancelación de pedidos:** al cancelar un pedido, se repone automáticamente el stock descontado.
 5. **Autenticación JWT:** se implementa un endpoint simplificado de emisión de token basado en `userId`/`email` existente, sin flujo completo de credenciales/password, dado que el enunciado no lo especifica.
 6. **Concurrencia en stock:** se usa UPDATE condicional atómico a nivel de base de datos (no lectura-luego-escritura en código) para evitar sobreventa bajo pedidos concurrentes.
@@ -337,17 +336,6 @@ Write-through resuelve consistencia en escritura, pero no disponibilidad del dat
 
 ---
 
-## Resumen de estimación
+## Orden de implementación
 
-| Épica | Story Points |
-|---|---|
-| Gestión de Usuarios | 4 |
-| Gestión de Productos | 12 |
-| Gestión de Pedidos | 16 |
-| Seguridad (Bonus) | 5 |
-| Infraestructura (Bonus) | 3 |
-| Testing | 10 |
-| Documentación | 2 |
-| **Total** | **52 pts** |
-
-**Orden de implementación sugerido:** Usuarios → Productos (con cache write-through) → Pedidos (incluye la pieza más compleja: async + concurrencia de stock) → JWT → Docker → Testing (en paralelo a cada épica funcional, no al final) → README.
+Usuarios → Productos (con cache write-through) → Pedidos (incluye la pieza más compleja: async + concurrencia de stock) → JWT → Docker → Testing (en paralelo a cada épica funcional, no al final) → README.
