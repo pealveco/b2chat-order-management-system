@@ -2,7 +2,20 @@
 
 Backend de un sistema simplificado de gestión de pedidos de e-commerce, desarrollado como prueba técnica para el proceso de selección de Backend Developer en B2Chat.
 
-**Estado del proyecto:** 🚧 En desarrollo — este README se actualiza progresivamente a medida que avanza la implementación.
+**Estado del proyecto:** ✅ Completo — todos los requisitos y los 4 bonus del enunciado están implementados.
+
+---
+
+## Bonus implementados
+
+El enunciado define 4 ítems opcionales — los 4 están implementados:
+
+| Bonus | Estado |
+|---|---|
+| Listar pedidos de un usuario con detalle (`GET /users/{id}/orders`) | ✅ |
+| Autenticación (JWT) | ✅ |
+| Cache con Redis para catálogo de productos (write-through + read-through) | ✅ |
+| Dockerización (`docker-compose.yml` + `Dockerfile`) | ✅ |
 
 ---
 
@@ -11,7 +24,7 @@ Backend de un sistema simplificado de gestión de pedidos de e-commerce, desarro
 - **Lenguaje:** Java 21
 - **Framework:** Spring Boot (WebFlux — programación reactiva)
 - **Persistencia:** PostgreSQL vía R2DBC
-- **Cache:** Redis (estrategia write-through + read-through)
+- **Cache:** Redis (write-through + read-through fallback para catálogo)
 - **Seguridad:** JWT
 - **Arquitectura:** Clean Architecture — [Scaffold Bancolombia](https://bancolombia.github.io/scaffold-clean-architecture/)
 - **Contenedores:** Docker / Docker Compose
@@ -21,11 +34,58 @@ Backend de un sistema simplificado de gestión de pedidos de e-commerce, desarro
 
 ## Cómo ejecutar el proyecto
 
-> 🚧 Sección pendiente de completar una vez finalizada la dockerización (ver backlog US-013).
+La aplicación se levanta junto con PostgreSQL y Redis usando Docker Compose. El archivo `.env` contiene valores de desarrollo local para contenedores y no se versiona porque incluye credenciales. Para ejecución local desde IntelliJ (por ejemplo) se usa `oms.env`, con los mismos valores funcionales pero apuntando a `localhost`.
+
+Primero crea el `.env` local desde el ejemplo versionado:
 
 ```bash
-# (placeholder — se completa al finalizar la infraestructura Docker)
-docker-compose up
+cp .env.example .env
+```
+
+```bash
+docker compose up --build
+```
+
+Si tu instalación usa el binario legacy:
+
+```bash
+docker-compose up --build
+```
+
+Este comando crea y levanta:
+
+- `app`: aplicación Spring Boot WebFlux, expuesta en `http://localhost:8080`.
+- `postgres`: PostgreSQL 16, expuesto en `localhost:5432`, con volumen persistente `postgres_data`.
+- `redis`: Redis 7, expuesto en `localhost:6379`.
+
+`app` depende de los healthchecks de `postgres` y `redis`, por lo que no intenta arrancar hasta que ambos servicios estén disponibles. Además, el contenedor de la app tiene healthcheck propio sobre `/actuator/health` y política `restart: on-failure:3` para tolerar fallos transitorios durante el primer arranque con volumen limpio.
+
+La app se conecta a esos servicios por variables de entorno:
+
+| Variable | Uso en Docker Compose |
+|---|---|
+| `SPRING_R2DBC_URL` | URL R2DBC hacia Postgres dentro de la red Docker (`postgres:5432`) |
+| `SPRING_R2DBC_USERNAME` / `SPRING_R2DBC_PASSWORD` | Credenciales de Postgres |
+| `SPRING_REDIS_HOST` / `SPRING_REDIS_PORT` | Host y puerto de Redis dentro de la red Docker (`redis:6379`) |
+| `JWT_SECRET` | Secreto local de firma JWT, mínimo 32 bytes |
+| `JWT_EXPIRATION_MINUTES` | Tiempo de expiración de los JWT emitidos |
+
+Para verificar que la app quedó arriba:
+
+```bash
+curl --location 'http://localhost:8080/actuator/health'
+```
+
+Para detener los contenedores:
+
+```bash
+docker compose down
+```
+
+Para detenerlos y borrar también el volumen de PostgreSQL local:
+
+```bash
+docker compose down -v
 ```
 
 ---
@@ -53,41 +113,166 @@ Backlog completo de historias de usuario y criterios de aceptación en [`docs/BA
 
 ## API — Endpoints
 
+Base URL local: `http://localhost:8080`. Toda respuesta exitosa va envuelta en `{ "data": ..., "meta": {...} }`; toda respuesta de error va envuelta en `{ "error": {...} }` — ver el detalle completo de status codes por endpoint en [`SPEC.md`](./SPEC.md#6-contratos-de-api).
+
+Los endpoints de escritura (`POST`, `PUT`, `DELETE`, salvo `POST /users` y `POST /auth/token`) requieren `Authorization: Bearer {token}`. El seed data (`r2dbc-schema.sql`) crea un usuario demo (`demo.user@example.com`) y tres productos, así que se puede obtener un token sin registrar nada primero:
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8080/auth/token \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"demo.user@example.com"}' | jq -r '.data.token')
+```
+
+Los ejemplos siguientes asumen `$TOKEN` ya exportado y `jq` disponible solo para extraerlo (no es requisito para consumir la API).
+
 ### Users
-| Método | Endpoint | Descripción |
-|---|---|---|
-| `POST` | `/users` | Registrar un nuevo usuario |
-| `GET` | `/users/{id}` | Obtener detalles de un usuario |
-| `GET` | `/users/{id}/orders` | Listar pedidos de un usuario *(bonus)* |
+| Método | Endpoint | Auth | Descripción |
+|---|---|---|---|
+| `POST` | `/users` | Público | Registrar un nuevo usuario *(implementado)* |
+| `GET` | `/users/{id}` | Público | Obtener detalles de un usuario *(implementado)* |
+| `GET` | `/users/{id}/orders` | Público | Listar pedidos de un usuario *(implementado / bonus)* |
+
+**Registrar usuario**
+```bash
+curl -i -X POST http://localhost:8080/users \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"juan@example.com","name":"Juan Perez","address":"Cra 10 #20-30, Bogotá"}'
+```
+```json
+// 201 Created
+{
+  "data": { "id": "b1f2...", "email": "juan@example.com", "name": "Juan Perez", "address": "Cra 10 #20-30, Bogotá" },
+  "meta": { "path": "/users", "timestamp": "2026-08-18T00:00:00Z" }
+}
+```
+Repetir la misma request responde `409 Conflict` con `error.code = "EMAIL_ALREADY_EXISTS"`.
+
+**Obtener usuario**
+```bash
+curl -s http://localhost:8080/users/{id} | jq
+```
+
+**Historial de pedidos de un usuario** *(bonus)*
+```bash
+curl -s http://localhost:8080/users/{id}/orders | jq
+```
 
 ### Products
-| Método | Endpoint | Descripción |
-|---|---|---|
-| `POST` | `/products` | Registrar un nuevo producto |
-| `GET` | `/products` | Listar catálogo de productos |
-| `PUT` | `/products/{id}` | Actualizar un producto |
-| `DELETE` | `/products/{id}` | Eliminar un producto (soft delete) |
+| Método | Endpoint | Auth | Descripción |
+|---|---|---|---|
+| `POST` | `/products` | Bearer JWT | Registrar un nuevo producto *(implementado)* |
+| `GET` | `/products` | Público | Listar catálogo de productos *(implementado)* |
+| `PUT` | `/products/{id}` | Bearer JWT | Actualizar un producto *(implementado)* |
+| `DELETE` | `/products/{id}` | Bearer JWT | Eliminar un producto (soft delete) *(implementado)* |
+
+**Crear producto**
+```bash
+curl -i -X POST http://localhost:8080/products \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Mouse inalámbrico","description":"Mouse ergonómico 2.4GHz","price":25000,"stock":100}'
+```
+```json
+// 201 Created
+{
+  "data": { "id": "c3d4...", "name": "Mouse inalámbrico", "description": "Mouse ergonómico 2.4GHz", "price": 25000, "stock": 100 },
+  "meta": { "path": "/products", "timestamp": "2026-08-18T00:00:00Z" }
+}
+```
+
+**Listar catálogo** (público, sin token)
+```bash
+curl -s http://localhost:8080/products | jq
+```
+
+**Actualizar producto**
+```bash
+curl -i -X PUT http://localhost:8080/products/{id} \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Mouse inalámbrico","description":"Mouse ergonómico 2.4GHz","price":22000,"stock":95}'
+```
+
+**Eliminar producto (soft delete)**
+```bash
+curl -i -X DELETE http://localhost:8080/products/{id} -H "Authorization: Bearer $TOKEN"
+# 204 No Content
+```
 
 ### Orders
-| Método | Endpoint | Descripción |
-|---|---|---|
-| `POST` | `/orders` | Crear un pedido (procesamiento asíncrono + notificación) |
-| `GET` | `/orders/{id}` | Obtener detalle de un pedido |
-| `PUT` | `/orders/{id}/status` | Actualizar estado de un pedido |
+| Método | Endpoint | Auth | Descripción |
+|---|---|---|---|
+| `POST` | `/orders` | Bearer JWT | Crear un pedido (persistencia transaccional + notificación asíncrona) *(implementado)* |
+| `GET` | `/orders/{id}` | Público | Obtener detalle de un pedido *(implementado)* |
+| `PUT` | `/orders/{id}/status` | Bearer JWT | Actualizar estado de un pedido *(implementado)* |
+
+**Crear pedido** (usando el usuario y productos del seed data)
+```bash
+USER_ID=$(curl -s http://localhost:8080/users/{id} | jq -r '.data.id')  # o el id del usuario demo/registrado
+
+curl -i -X POST http://localhost:8080/orders \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "userId": "'"$USER_ID"'",
+    "items": [{ "productId": "11111111-1111-1111-1111-111111111111", "quantity": 2 }]
+  }'
+```
+```json
+// 202 Accepted (notificación de recepción se procesa de forma asíncrona)
+{
+  "data": {
+    "id": "d5e6...", "userId": "...", "status": "PENDING", "createdAt": "2026-08-18T00:00:00Z",
+    "items": [{ "productId": "11111111-1111-1111-1111-111111111111", "quantity": 2, "unitPriceAtOrderTime": 250000.00 }]
+  },
+  "meta": { "path": "/orders", "timestamp": "2026-08-18T00:00:00Z" }
+}
+```
+Pedir más `quantity` que el stock disponible responde `409 Conflict` con `error.code = "INSUFFICIENT_STOCK"`.
+
+**Obtener pedido**
+```bash
+curl -s http://localhost:8080/orders/{id} | jq
+```
+
+**Actualizar estado de pedido**
+```bash
+curl -i -X PUT http://localhost:8080/orders/{id}/status \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"status":"PROCESSING"}'
+```
+Transiciones válidas: `PENDING → PROCESSING | CANCELLED`, `PROCESSING → COMPLETED | CANCELLED`. Una transición inválida (ej. `COMPLETED → PENDING`) responde `400 Bad Request` con `error.code = "INVALID_ORDER_STATUS_TRANSITION"`. Cancelar repone stock automáticamente.
 
 ### Auth *(bonus)*
-| Método | Endpoint | Descripción |
-|---|---|---|
-| `POST` | `/auth/token` | Emitir token JWT |
+| Método | Endpoint | Auth | Descripción |
+|---|---|---|---|
+| `POST` | `/auth/token` | Público | Emitir token JWT *(implementado / bonus)* |
 
-> Ejemplos completos de request/response en [`SPEC.md`](./SPEC.md#6-contratos-de-api).
+Acepta `userId` **o** `email` (exactamente uno de los dos):
+```bash
+curl -s -X POST http://localhost:8080/auth/token \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"demo.user@example.com"}'
+```
+```json
+// 200 OK
+{
+  "data": { "token": "eyJhbGciOi...", "tokenType": "Bearer", "expiresInSeconds": 3600 },
+  "meta": { "path": "/auth/token", "timestamp": "2026-08-18T00:00:00Z" }
+}
+```
+
+> Ejemplos completos de request/response, incluyendo todos los casos de error por status code, en [`SPEC.md`](./SPEC.md#6-contratos-de-api).
 
 ---
 
 ## Decisiones de diseño
 
 ### Manejo asíncrono de pedidos
-La creación de un pedido (`POST /orders`) valida stock y persiste el pedido de forma síncrona y transaccional (no puede ser "eventual", ya que involucra descuento de inventario). Lo que se procesa de forma **asíncrona** es el envío de la notificación de recepción: se emite un evento en memoria (`Sinks.Many` de Project Reactor) inmediatamente después de persistir, y un listener independiente procesa la notificación sin bloquear la respuesta HTTP. El mismo mecanismo dispara la notificación de pedido completado (bonus).
+La creación de un pedido (`POST /orders`) valida usuario, valida productos activos, descuenta stock y persiste el pedido de forma síncrona y transaccional (no puede ser "eventual", ya que involucra descuento de inventario). Lo que se procesa de forma **asíncrona** es el envío de la notificación de recepción: se emite un `OrderPlacedEvent` en memoria (`Sinks.Many` de Project Reactor) inmediatamente después de persistir, y un listener independiente procesa la notificación sin bloquear la respuesta HTTP.
+
+Cuando un pedido pasa a `COMPLETED`, se emite un `OrderCompletedEvent` usando el mismo patrón de notificación asíncrona en memoria. El listener simula el envío con un log estructurado.
 
 En un entorno productivo, este mecanismo se reemplazaría por un publisher real hacia **AWS SQS/SNS o EventBridge** — el principio de desacople (responder rápido, notificar aparte) es el mismo que se aplicaría en producción.
 
@@ -96,18 +281,27 @@ Para evitar sobreventa bajo pedidos concurrentes, el descuento de stock **no** u
 
 ```sql
 UPDATE products SET stock = stock - :quantity
-WHERE id = :productId AND stock >= :quantity;
+WHERE id = :productId AND active = TRUE AND stock >= :quantity;
 ```
 
 Si el número de filas afectadas es 0, se interpreta como stock insuficiente y la operación se aborta.
 
-### Estrategia de caché
-Se implementa **write-through** (toda escritura de producto actualiza Postgres y Redis en la misma operación, garantizando consistencia inmediata) combinado con **read-through fallback** (si ocurre un miss real — cache frío en el arranque, o evicción — se lee de Postgres y se repuebla Redis).
+US-008 queda cubierta explícitamente con `ProductStockConcurrencyIntegrationTest`, que ejecuta descuentos concurrentes contra PostgreSQL vía Testcontainers y verifica que, cuando dos pedidos compiten por el último ítem, exactamente uno actualiza la fila y el otro falla sin dejar stock negativo.
 
-Para un entorno de mayor tráfico, el diseño completo evolucionaría a incluir TTL con jitter (para evitar expiración simultánea de claves y *thundering herd*) y un job de *refresh-ahead* que renueve proactivamente las claves antes de vencer. Esto no se implementó en el alcance de esta prueba por tiempo, pero se documenta como la evolución natural del diseño — ver [Assumptions](#assumptions).
+### Estrategia de caché
+Actualmente se implementa **write-through** para productos: toda creación o actualización de producto persiste primero en Postgres y, si la persistencia confirma, escribe el producto en Redis con la clave `product:{id}` y registra el id en el set `products:all`. La eliminación usa soft delete en Postgres (`active=false`) y luego elimina la clave individual de Redis y remueve el id del set `products:all`.
+
+La consulta de catálogo (`GET /products`) implementa **read-through fallback**: primero intenta reconstruir la lista desde Redis usando `products:all`; ante un miss real — cache frío en el arranque, entrada incompleta, TTL expirado o evicción — lee desde Postgres, responde al cliente y repuebla Redis para futuras lecturas.
+
+Cuando `POST /orders` descuenta stock, refresca en Redis las claves de los productos afectados después de confirmar la transacción en Postgres. Cuando `PUT /orders/{id}/status` cancela un pedido, repone stock y refresca esas mismas claves. Así `products:all` conserva el índice completo del catálogo y `product:{id}` queda con el stock actualizado.
+
+Para un entorno de mayor tráfico, el diseño completo evolucionaría a incluir TTL con jitter (para evitar expiración simultánea de claves y *thundering herd*) y un job de *refresh-ahead* que renueve proactivamente las claves antes de vencer. Esto queda documentado como evolución natural del diseño — ver [Assumptions](#assumptions).
+
+### Hallazgos de las pruebas de integración (BlockHound)
+Las pruebas end-to-end de US-015, al ejecutarse por primera vez con contexto completo + servicios reales + BlockHound activo, revelaron dos llamadas bloqueantes preexistentes en hilos reactivos (lectura del schema SQL, apertura de la conexión reactiva de Redis). Ambas se corrigieron sin cambiar comportamiento observable de la API — detalle técnico en [SPEC.md §11.1](./SPEC.md#111-hallazgos-blocking-calls-detectados-por-blockhound).
 
 ### Desarrollo asistido por IA (Spec-Driven Development)
-Este proyecto se desarrolló usando **Claude Code** bajo un enfoque de Spec-Driven Development (SDD): definición de backlog (historias de usuario + criterios de aceptación) → especificación técnica (`SPEC.md`, contratos de API, modelo de datos, decisiones de arquitectura) → implementación guiada por esa especificación → validación de estructura con `./gradlew vs` del scaffold Bancolombia. Este proceso se mantuvo documentado y versionado a lo largo del desarrollo, no aplicado de forma ad-hoc.
+Este proyecto se desarrolló usando **Claude Code** y **Codex** bajo un enfoque de Spec-Driven Development (SDD): definición de backlog (historias de usuario + criterios de aceptación) → especificación técnica (`SPEC.md`, contratos de API, modelo de datos, decisiones de arquitectura) → implementación guiada por esa especificación → validación de estructura con `./gradlew vs` del scaffold Bancolombia. Este proceso se mantuvo documentado y versionado a lo largo del desarrollo, no aplicado de forma ad-hoc.
 
 ---
 
@@ -115,23 +309,29 @@ Este proyecto se desarrolló usando **Claude Code** bajo un enfoque de Spec-Driv
 
 Decisiones de alcance no especificadas explícitamente en el enunciado de la prueba técnica:
 
-1. **Caching:** estrategia write-through + read-through fallback (no cache-aside), para evitar servir datos desactualizados. TTL con jitter y job de refresh-ahead quedan documentados como evolución productiva no implementada por alcance/tiempo.
+1. **Caching:** write-through implementado para creación/actualización/eliminación de producto y read-through fallback implementado para catálogo. TTL con jitter y job de refresh-ahead quedan documentados como evolución productiva.
 2. **Notificaciones:** simuladas en memoria con un patrón productor/consumidor reactivo, representando el mismo principio de desacople que se usaría en producción con AWS SQS/SNS o EventBridge.
 3. **Eliminación de productos:** soft delete (`active=false`) en lugar de DELETE físico, para preservar integridad referencial con pedidos históricos.
 4. **Cancelación de pedidos:** al cancelar un pedido, se repone automáticamente el stock descontado.
-5. **Autenticación JWT:** endpoint simplificado de emisión de token basado en `userId`/`email` existente, sin flujo completo de credenciales/password, dado que el enunciado no lo especifica. Solo los endpoints de escritura (`POST`/`PUT`/`DELETE`) están protegidos; los `GET` son públicos.
+5. **Autenticación JWT:** endpoint simplificado de emisión de token basado en `userId`/`email` existente, sin flujo completo de credenciales/password, dado que el enunciado no lo especifica. Los endpoints de escritura (`POST`, `PUT`, `DELETE`) quedan protegidos con `Authorization: Bearer {token}`; `POST /users`, `POST /auth/token` y los `GET` quedan públicos por alcance de la prueba.
 6. **Concurrencia en stock:** UPDATE condicional atómico a nivel de base de datos, no lectura-luego-escritura en código.
+7. **Consistencia de cache en pedidos:** al crear o cancelar pedidos se refresca cache de productos afectados después de confirmar Postgres; no se intenta actualizar Redis dentro de la transacción de base de datos.
+8. **Historial de pedidos:** `GET /users/{id}/orders` se implementa sin paginación por alcance de la prueba. En producción debería evolucionar a paginación por cursor o `page/size` con orden estable por `createdAt`.
+9. **Blocking calls detectados por las pruebas de integración:** al implementar US-015 con contexto completo + servicios reales + BlockHound, se corrigieron dos llamadas bloqueantes preexistentes en hilos reactivos (lectura del schema SQL y apertura de la conexión reactiva de Redis) — ver [Hallazgos de las pruebas de integración](#hallazgos-de-las-pruebas-de-integración-blockhound). Ninguna cambia comportamiento observable de la API.
 
 ---
 
 ## Testing
 
 - **Unitario:** casos de uso del dominio con puertos mockeados (JUnit 5 + Mockito + Reactor Test).
-- **Integración:** endpoints críticos (registro de usuario, creación de pedido, actualización de estado) contra instancias reales de PostgreSQL y Redis vía Testcontainers.
+- **Integración:** endpoints críticos y concurrencia de stock contra instancias reales de PostgreSQL/Redis vía Testcontainers.
+  - `ProductStockConcurrencyIntegrationTest` (`r2dbc-postgresql`): concurrencia de stock (US-008), directo contra Postgres vía JDBC.
+  - `UserIntegrationTest` / `OrderIntegrationTest` (`app-service`, paquete `integration`): endpoints críticos end-to-end (US-015) — registro de usuario e email duplicado, creación de pedido y stock insuficiente (409), actualización de estado — levantando el contexto completo de Spring Boot (`@SpringBootTest` + `WebTestClient`) contra Postgres y Redis reales. Comparten contenedores entre clases con el patrón *singleton container* de Testcontainers.
+
+Requiere Docker corriendo (Testcontainers levanta Postgres y Redis efímeros).
 
 ```bash
-# (placeholder — comando exacto se confirma al finalizar el setup de testing)
-./gradlew test
+./gradlew :model:test :usecase:test :r2dbc-postgresql:test :notification:test :reactive-web:test :app-service:test
 ```
 
 ---

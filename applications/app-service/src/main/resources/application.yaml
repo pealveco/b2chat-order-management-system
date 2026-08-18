@@ -1,25 +1,36 @@
 server:
-  port: 8080
+  port: ${SERVER_PORT:8080}
 spring:
   application:
     name: "OrderManagementSystem"
   devtools:
     add-properties: false
-  h2:
-    console:
-      enabled: true
-      path: "/h2"
   profiles:
     include: null
-  redis:
-    host: "localhost"
-    port: 6379
+  r2dbc:
+    url: ${SPRING_R2DBC_URL:r2dbc:postgresql://localhost:5432/b2chat_orders}
+    username: ${SPRING_R2DBC_USERNAME:b2chat}
+    password: ${SPRING_R2DBC_PASSWORD:b2chat_dev_password}
+  data:
+    redis:
+      host: ${SPRING_REDIS_HOST:localhost}
+      port: ${SPRING_REDIS_PORT:6379}
+      repositories:
+        enabled: false
   security:
     oauth2:
       resourceserver:
         jwt:
-          issuer-uri: "https://idp.example.com/issuer"
-          client-id: "myclientid"
+          issuer-uri: ${JWT_ISSUER_URI:https://idp.example.com/issuer}
+          client-id: ${JWT_CLIENT_ID:myclientid}
+adapters:
+  r2dbc:
+    host: ${ADAPTERS_R2DBC_HOST:localhost}
+    port: ${ADAPTERS_R2DBC_PORT:5432}
+    database: ${ADAPTERS_R2DBC_DATABASE:b2chat_orders}
+    schema: ${ADAPTERS_R2DBC_SCHEMA:public}
+    username: ${ADAPTERS_R2DBC_USERNAME:b2chat}
+    password: ${ADAPTERS_R2DBC_PASSWORD:b2chat_dev_password}
 management:
   endpoints:
     web:
@@ -32,4 +43,6 @@ management:
 cors:
   allowed-origins: "http://localhost:4200,http://localhost:8080"
 jwt:
-  json-exp-roles: "/roles"
+  secret: ${JWT_SECRET}
+  expiration-minutes: ${JWT_EXPIRATION_MINUTES:60}
+  json-exp-roles: ${JWT_JSON_EXP_ROLES:/roles}
