@@ -333,6 +333,7 @@ Write-through resuelve consistencia en escritura, pero no disponibilidad del dat
 5. **Autenticación JWT:** se implementa un endpoint simplificado de emisión de token basado en `userId`/`email` existente, sin flujo completo de credenciales/password, dado que el enunciado no lo especifica.
 6. **Concurrencia en stock:** se usa UPDATE condicional atómico a nivel de base de datos (no lectura-luego-escritura en código) para evitar sobreventa bajo pedidos concurrentes.
 7. **Estrategia de caché:** se implementa write-through (consistencia inmediata en escritura) + read-through fallback (disponibilidad ante miss real). No se implementan TTL con jitter ni job de refresh-ahead — se documentan como la evolución natural del diseño para un entorno de mayor tráfico, fuera del alcance de esta prueba por tiempo, pero conscientemente considerados y no omitidos por desconocimiento.
+8. **Blocking calls detectados por las pruebas de integración (US-015):** al levantar el contexto completo de Spring Boot contra Postgres/Redis reales con BlockHound activo (por primera vez, ya que ningún test previo combinaba esas tres condiciones), aparecieron dos llamadas bloqueantes reales en hilos reactivos: lectura perezosa del schema SQL desde el classpath (`R2dbcSchemaInitializerConfig`) y apertura perezosa/bloqueante de la conexión reactiva compartida de Redis. Ambas se corrigieron (lectura eager a memoria; warm-up de la conexión reactiva en el arranque vía `RedisConnectionWarmupConfig`) sin cambiar comportamiento observable de la API.
 
 ---
 

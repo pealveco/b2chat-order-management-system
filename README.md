@@ -161,6 +161,14 @@ Cuando `POST /orders` descuenta stock, refresca en Redis las claves de los produ
 
 Para un entorno de mayor tráfico, el diseño completo evolucionaría a incluir TTL con jitter (para evitar expiración simultánea de claves y *thundering herd*) y un job de *refresh-ahead* que renueve proactivamente las claves antes de vencer. Esto queda documentado como evolución natural del diseño — ver [Assumptions](#assumptions).
 
+### Hallazgos de las pruebas de integración (BlockHound)
+Las pruebas de integración end-to-end (US-015) levantan el contexto completo de Spring Boot contra Postgres y Redis reales. Al hacerlo por primera vez con `blockhound-junit-platform` activo (ya presente en el proyecto para detectar llamadas bloqueantes en hilos reactivos), aparecieron dos blocking calls reales en producción que ningún test anterior ejercitaba, porque ninguno combinaba contexto completo + servicios reales + BlockHound simultáneamente:
+
+1. **`R2dbcSchemaInitializerConfig`** leía el `.sql` del classpath (`ClassPathResource`) de forma perezosa dentro del pipeline reactivo, en el hilo Netty del driver R2DBC. Se corrigió leyendo el recurso a memoria (`ByteArrayResource`) de forma *eager*, en el hilo normal de creación del bean, antes de construir la cadena reactiva.
+2. La conexión reactiva compartida de Redis (Lettuce) se abre, por diseño de Spring Data Redis, de forma perezosa **y bloqueante** (`CompletableFuture#get()`) en la primera operación reactiva real, en lugar de durante el arranque. Se agregó `RedisConnectionWarmupConfig` (`ApplicationRunner` en el módulo `redis`) que fuerza esa conexión durante el startup, antes de que el servidor acepte tráfico.
+
+Ninguno de los dos cambia comportamiento observable de la API; ambos eliminan un riesgo real de saturar el event-loop bajo carga en un arranque en frío. Es un buen ejemplo de por qué US-015 pide explícitamente instancias reales y no mocks: el problema es invisible en pruebas unitarias o con dobles de prueba.
+
 ### Desarrollo asistido por IA (Spec-Driven Development)
 Este proyecto se desarrolló usando **Claude Code** bajo un enfoque de Spec-Driven Development (SDD): definición de backlog (historias de usuario + criterios de aceptación) → especificación técnica (`SPEC.md`, contratos de API, modelo de datos, decisiones de arquitectura) → implementación guiada por esa especificación → validación de estructura con `./gradlew vs` del scaffold Bancolombia. Este proceso se mantuvo documentado y versionado a lo largo del desarrollo, no aplicado de forma ad-hoc.
 
@@ -178,16 +186,21 @@ Decisiones de alcance no especificadas explícitamente en el enunciado de la pru
 6. **Concurrencia en stock:** UPDATE condicional atómico a nivel de base de datos, no lectura-luego-escritura en código.
 7. **Consistencia de cache en pedidos:** al crear o cancelar pedidos se refresca cache de productos afectados después de confirmar Postgres; no se intenta actualizar Redis dentro de la transacción de base de datos.
 8. **Historial de pedidos:** `GET /users/{id}/orders` se implementa sin paginación por alcance de la prueba. En producción debería evolucionar a paginación por cursor o `page/size` con orden estable por `createdAt`.
+9. **Blocking calls detectados por las pruebas de integración:** al implementar US-015 con contexto completo + servicios reales + BlockHound, se corrigieron dos llamadas bloqueantes preexistentes en hilos reactivos (lectura del schema SQL y apertura de la conexión reactiva de Redis) — ver [Hallazgos de las pruebas de integración](#hallazgos-de-las-pruebas-de-integración-blockhound). Ninguna cambia comportamiento observable de la API.
 
 ---
 
 ## Testing
 
 - **Unitario:** casos de uso del dominio con puertos mockeados (JUnit 5 + Mockito + Reactor Test).
-- **Integración:** endpoints críticos y concurrencia de stock contra instancias reales de PostgreSQL/Redis vía Testcontainers o contenedores equivalentes.
+- **Integración:** endpoints críticos y concurrencia de stock contra instancias reales de PostgreSQL/Redis vía Testcontainers.
+  - `ProductStockConcurrencyIntegrationTest` (`r2dbc-postgresql`): concurrencia de stock (US-008), directo contra Postgres vía JDBC.
+  - `UserIntegrationTest` / `OrderIntegrationTest` (`app-service`, paquete `integration`): endpoints críticos end-to-end (US-015) — registro de usuario e email duplicado, creación de pedido y stock insuficiente (409), actualización de estado — levantando el contexto completo de Spring Boot (`@SpringBootTest` + `WebTestClient`) contra Postgres y Redis reales. Comparten contenedores entre clases con el patrón *singleton container* de Testcontainers.
+
+Requiere Docker corriendo (Testcontainers levanta Postgres y Redis efímeros).
 
 ```bash
-./gradlew :model:test :usecase:test :r2dbc-postgresql:test :notification:test :reactive-web:test :app-service:classes
+./gradlew :model:test :usecase:test :r2dbc-postgresql:test :notification:test :reactive-web:test :app-service:test
 ```
 
 ---

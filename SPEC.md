@@ -33,7 +33,7 @@ Usar las tareas del scaffold (`Generate Driven Adapter` / `Generate Entry Point`
 | Módulo | Tipo | Responsabilidad |
 |---|---|---|
 | `infrastructure/driven-adapters/r2dbc-postgresql` | Driven adapter | Persistencia de `users`, `products`, `orders`, `order_items` |
-| `infrastructure/driven-adapters/redis` | Driven adapter | Cache write-through + read-through del catálogo de productos |
+| `infrastructure/driven-adapters/redis` | Driven adapter | Cache write-through + read-through del catálogo de productos. Incluye `RedisConnectionWarmupConfig`, que fuerza la apertura de la conexión reactiva compartida durante el arranque (ver §11.1) |
 | `infrastructure/driven-adapters/notification` | Driven adapter genérico del scaffold | Publisher/listener de eventos `OrderPlacedEvent`, simula envío de notificación de recepción (log estructurado) |
 | `infrastructure/entry-points/reactive-web` | Entry point | Handlers/Routers funcionales WebFlux + filtro de seguridad JWT |
 
@@ -605,7 +605,7 @@ Durante esta fase, el schema local y los datos mínimos esenciales para probar H
 infrastructure/driven-adapters/r2dbc-postgresql/src/main/resources/r2dbc-schema.sql
 ```
 
-Ese archivo se carga al arrancar la aplicación mediante `R2dbcSchemaInitializerConfig`, usando `ConnectionFactoryInitializer` y `ResourceDatabasePopulator`.
+Ese archivo se carga al arrancar la aplicación mediante `R2dbcSchemaInitializerConfig`, usando `ConnectionFactoryInitializer` y `ResourceDatabasePopulator`. El recurso se lee a memoria (`ByteArrayResource`) de forma eager, fuera del pipeline reactivo — ver §11.1.
 
 Convención del archivo:
 
@@ -815,6 +815,21 @@ Resumen de la decisión US-007:
 | Entry point | Contratos HTTP, status codes, response envelope, error envelope y validaciones de request | `WebTestClient` |
 | Adapter | Mapeo de entidades, errores de persistencia y constraints | JUnit 5, Mockito, `StepVerifier` |
 | Integración | `POST /users` (incl. email duplicado), `POST /orders` (incl. stock insuficiente → 409), US-008 concurrencia de stock, `PUT /orders/{id}/status` | `@SpringBootTest`, `WebTestClient`, Testcontainers (Postgres + Redis reales) |
+
+US-015 se implementa en `applications/app-service/src/test/java/.../integration`:
+
+- `IntegrationTestBase`: `@SpringBootTest(webEnvironment = RANDOM_PORT)` + `@AutoConfigureWebTestClient` contra `MainApplication`. Levanta Postgres (`postgres:16-alpine`) y Redis (`redis:7-alpine`) reales con Testcontainers usando el patrón *singleton container* (contenedores arrancados manualmente en un bloque `static`, sin `@Testcontainers`/`@Container`, para que se compartan entre clases de test sin que uno detenga el contenedor del otro al terminar). `@DynamicPropertySource` sobreescribe `spring.r2dbc.*`, `adapters.r2dbc.*`, `spring.data.redis.*` y `jwt.secret` con los valores del contenedor.
+- `UserIntegrationTest`: registro de usuario y conflicto por email duplicado (409).
+- `OrderIntegrationTest`: creación de pedido con verificación de persistencia real (GET posterior), stock insuficiente (409), actualización de estado con verificación de persistencia.
+
+### 11.1 Hallazgos: blocking calls detectados por BlockHound
+
+El proyecto ya incluye `blockhound-junit-platform` (detecta llamadas bloqueantes ejecutadas en hilos reactivos). Hasta US-015, ningún test combinaba contexto completo de Spring Boot + servicios reales + BlockHound activo simultáneamente, así que dos blocking calls preexistentes nunca se habían manifestado:
+
+1. **`R2dbcSchemaInitializerConfig`**: `ResourceDatabasePopulator` leía `r2dbc-schema.sql` desde el classpath (`ClassPathResource`) de forma perezosa, dentro de la cadena reactiva que ejecuta el `ConnectionFactoryInitializer` — la lectura terminaba ocurriendo en un hilo Netty del driver R2DBC. Fix: leer el recurso a memoria (`ByteArrayResource`) de forma eager, en el hilo normal de creación del bean, antes de construir la cadena reactiva.
+2. **Conexión reactiva compartida de Redis**: Spring Data Redis abre eagerly la conexión *imperativa* compartida durante el arranque, pero no la *reactiva* — esa se abre de forma perezosa y bloqueante (`CompletableFuture#get()` en Lettuce) en la primera operación reactiva real. Fix: `RedisConnectionWarmupConfig` (módulo `redis`), un `ApplicationRunner` que fuerza esa conexión (`ping().block()`) durante el arranque, antes de que el servidor acepte tráfico.
+
+Ninguno de los dos fixes cambia comportamiento observable de la API; ambos eliminan un riesgo real de bloquear el event-loop bajo carga en un arranque en frío. Se documenta como Assumption #9 en el README y en `BACKLOG.md`.
 
 ---
 
