@@ -1,6 +1,6 @@
 # Backlog — B2Chat Practical Test: E-Commerce Order Management System
 
-**Stack:** Java + Spring Boot WebFlux (reactivo) + R2DBC + PostgreSQL + Redis (write-through) + JWT + Docker
+**Stack:** Java + Spring Boot WebFlux (reactivo) + R2DBC + PostgreSQL + Redis (write-through + read-through) + JWT + Docker
 **Arquitectura:** Clean Architecture — Scaffold Bancolombia
 **Entrega:** Repositorio GitHub → fredy@b2chat.io | Deadline: 18/08/2026
 
@@ -315,7 +315,7 @@ Write-through resuelve consistencia en escritura, pero no disponibilidad del dat
 - Instrucciones de setup y ejecución (local y con Docker).
 - Listado de endpoints con ejemplos de request/response (curl o similar).
 - Sección de **Assumptions** — documentando cada decisión de alcance no especificada explícitamente en el enunciado (ver lista consolidada abajo).
-- Sección breve de **Development approach**, mencionando el uso de Claude Code bajo un enfoque spec-driven (spec → arquitectura → implementación → validación de estructura con `./gradlew vs` del scaffold Bancolombia) — alineado con el requisito diferenciador que B2Chat pidió explícitamente en su convocatoria.
+- Sección breve de **Development approach**, uso de Claude Code y Codex bajo un enfoque spec-driven (spec → arquitectura → implementación → validación de estructura con `./gradlew vs` del scaffold Bancolombia) — alineado con el requisito diferenciador.
 - Sección de **Production considerations** (o dentro de Assumptions): explicar el diseño completo de caché (write-through + read-through implementados; TTL con jitter + job de refresh-ahead como evolución no implementada por alcance) — ver Assumption #7. No dejarlo implícito en el código; el evaluador debe ver que la decisión fue consciente, no una omisión.
 
 **Prioridad:** Alta | **Estimado:** 2 pts

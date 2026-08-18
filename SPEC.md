@@ -1,6 +1,6 @@
 # SPEC.md — B2Chat Order Management System
 
-> Fuente de verdad técnica para el desarrollo asistido por Claude Code bajo enfoque Spec-Driven Development (SDD).
+> Fuente de verdad técnica para el desarrollo asistido por Claude Code y Codex bajo enfoque Spec-Driven Development (SDD).
 > El backlog (`B2Chat_Backlog_Prueba_Tecnica.md`) define el QUÉ (historias + criterios de aceptación).
 > Este documento define el CÓMO (contratos, modelo de datos, estructura exacta de módulos, decisiones de arquitectura).
 

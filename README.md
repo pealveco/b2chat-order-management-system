@@ -6,6 +6,19 @@ Backend de un sistema simplificado de gestión de pedidos de e-commerce, desarro
 
 ---
 
+## Bonus implementados
+
+El enunciado define 4 ítems opcionales — los 4 están implementados:
+
+| Bonus | Estado |
+|---|---|
+| Listar pedidos de un usuario con detalle (`GET /users/{id}/orders`) | ✅ |
+| Autenticación (JWT) | ✅ |
+| Cache con Redis para catálogo de productos (write-through + read-through) | ✅ |
+| Dockerización (`docker-compose.yml` + `Dockerfile`) | ✅ |
+
+---
+
 ## Stack Tecnológico
 
 - **Lenguaje:** Java 21
@@ -100,12 +113,49 @@ Backlog completo de historias de usuario y criterios de aceptación en [`docs/BA
 
 ## API — Endpoints
 
+Base URL local: `http://localhost:8080`. Toda respuesta exitosa va envuelta en `{ "data": ..., "meta": {...} }`; toda respuesta de error va envuelta en `{ "error": {...} }` — ver el detalle completo de status codes por endpoint en [`SPEC.md`](./SPEC.md#6-contratos-de-api).
+
+Los endpoints de escritura (`POST`, `PUT`, `DELETE`, salvo `POST /users` y `POST /auth/token`) requieren `Authorization: Bearer {token}`. El seed data (`r2dbc-schema.sql`) crea un usuario demo (`demo.user@example.com`) y tres productos, así que se puede obtener un token sin registrar nada primero:
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8080/auth/token \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"demo.user@example.com"}' | jq -r '.data.token')
+```
+
+Los ejemplos siguientes asumen `$TOKEN` ya exportado y `jq` disponible solo para extraerlo (no es requisito para consumir la API).
+
 ### Users
 | Método | Endpoint | Auth | Descripción |
 |---|---|---|---|
 | `POST` | `/users` | Público | Registrar un nuevo usuario *(implementado)* |
 | `GET` | `/users/{id}` | Público | Obtener detalles de un usuario *(implementado)* |
 | `GET` | `/users/{id}/orders` | Público | Listar pedidos de un usuario *(implementado / bonus)* |
+
+**Registrar usuario**
+```bash
+curl -i -X POST http://localhost:8080/users \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"juan@example.com","name":"Juan Perez","address":"Cra 10 #20-30, Bogotá"}'
+```
+```json
+// 201 Created
+{
+  "data": { "id": "b1f2...", "email": "juan@example.com", "name": "Juan Perez", "address": "Cra 10 #20-30, Bogotá" },
+  "meta": { "path": "/users", "timestamp": "2026-08-18T00:00:00Z" }
+}
+```
+Repetir la misma request responde `409 Conflict` con `error.code = "EMAIL_ALREADY_EXISTS"`.
+
+**Obtener usuario**
+```bash
+curl -s http://localhost:8080/users/{id} | jq
+```
+
+**Historial de pedidos de un usuario** *(bonus)*
+```bash
+curl -s http://localhost:8080/users/{id}/orders | jq
+```
 
 ### Products
 | Método | Endpoint | Auth | Descripción |
@@ -115,6 +165,40 @@ Backlog completo de historias de usuario y criterios de aceptación en [`docs/BA
 | `PUT` | `/products/{id}` | Bearer JWT | Actualizar un producto *(implementado)* |
 | `DELETE` | `/products/{id}` | Bearer JWT | Eliminar un producto (soft delete) *(implementado)* |
 
+**Crear producto**
+```bash
+curl -i -X POST http://localhost:8080/products \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Mouse inalámbrico","description":"Mouse ergonómico 2.4GHz","price":25000,"stock":100}'
+```
+```json
+// 201 Created
+{
+  "data": { "id": "c3d4...", "name": "Mouse inalámbrico", "description": "Mouse ergonómico 2.4GHz", "price": 25000, "stock": 100 },
+  "meta": { "path": "/products", "timestamp": "2026-08-18T00:00:00Z" }
+}
+```
+
+**Listar catálogo** (público, sin token)
+```bash
+curl -s http://localhost:8080/products | jq
+```
+
+**Actualizar producto**
+```bash
+curl -i -X PUT http://localhost:8080/products/{id} \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Mouse inalámbrico","description":"Mouse ergonómico 2.4GHz","price":22000,"stock":95}'
+```
+
+**Eliminar producto (soft delete)**
+```bash
+curl -i -X DELETE http://localhost:8080/products/{id} -H "Authorization: Bearer $TOKEN"
+# 204 No Content
+```
+
 ### Orders
 | Método | Endpoint | Auth | Descripción |
 |---|---|---|---|
@@ -122,12 +206,64 @@ Backlog completo de historias de usuario y criterios de aceptación en [`docs/BA
 | `GET` | `/orders/{id}` | Público | Obtener detalle de un pedido *(implementado)* |
 | `PUT` | `/orders/{id}/status` | Bearer JWT | Actualizar estado de un pedido *(implementado)* |
 
+**Crear pedido** (usando el usuario y productos del seed data)
+```bash
+USER_ID=$(curl -s http://localhost:8080/users/{id} | jq -r '.data.id')  # o el id del usuario demo/registrado
+
+curl -i -X POST http://localhost:8080/orders \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "userId": "'"$USER_ID"'",
+    "items": [{ "productId": "11111111-1111-1111-1111-111111111111", "quantity": 2 }]
+  }'
+```
+```json
+// 202 Accepted (notificación de recepción se procesa de forma asíncrona)
+{
+  "data": {
+    "id": "d5e6...", "userId": "...", "status": "PENDING", "createdAt": "2026-08-18T00:00:00Z",
+    "items": [{ "productId": "11111111-1111-1111-1111-111111111111", "quantity": 2, "unitPriceAtOrderTime": 250000.00 }]
+  },
+  "meta": { "path": "/orders", "timestamp": "2026-08-18T00:00:00Z" }
+}
+```
+Pedir más `quantity` que el stock disponible responde `409 Conflict` con `error.code = "INSUFFICIENT_STOCK"`.
+
+**Obtener pedido**
+```bash
+curl -s http://localhost:8080/orders/{id} | jq
+```
+
+**Actualizar estado de pedido**
+```bash
+curl -i -X PUT http://localhost:8080/orders/{id}/status \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"status":"PROCESSING"}'
+```
+Transiciones válidas: `PENDING → PROCESSING | CANCELLED`, `PROCESSING → COMPLETED | CANCELLED`. Una transición inválida (ej. `COMPLETED → PENDING`) responde `400 Bad Request` con `error.code = "INVALID_ORDER_STATUS_TRANSITION"`. Cancelar repone stock automáticamente.
+
 ### Auth *(bonus)*
 | Método | Endpoint | Auth | Descripción |
 |---|---|---|---|
 | `POST` | `/auth/token` | Público | Emitir token JWT *(implementado / bonus)* |
 
-> Ejemplos completos de request/response en [`SPEC.md`](./SPEC.md#6-contratos-de-api).
+Acepta `userId` **o** `email` (exactamente uno de los dos):
+```bash
+curl -s -X POST http://localhost:8080/auth/token \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"demo.user@example.com"}'
+```
+```json
+// 200 OK
+{
+  "data": { "token": "eyJhbGciOi...", "tokenType": "Bearer", "expiresInSeconds": 3600 },
+  "meta": { "path": "/auth/token", "timestamp": "2026-08-18T00:00:00Z" }
+}
+```
+
+> Ejemplos completos de request/response, incluyendo todos los casos de error por status code, en [`SPEC.md`](./SPEC.md#6-contratos-de-api).
 
 ---
 
@@ -170,7 +306,7 @@ Las pruebas de integración end-to-end (US-015) levantan el contexto completo de
 Ninguno de los dos cambia comportamiento observable de la API; ambos eliminan un riesgo real de saturar el event-loop bajo carga en un arranque en frío. Es un buen ejemplo de por qué US-015 pide explícitamente instancias reales y no mocks: el problema es invisible en pruebas unitarias o con dobles de prueba.
 
 ### Desarrollo asistido por IA (Spec-Driven Development)
-Este proyecto se desarrolló usando **Claude Code** bajo un enfoque de Spec-Driven Development (SDD): definición de backlog (historias de usuario + criterios de aceptación) → especificación técnica (`SPEC.md`, contratos de API, modelo de datos, decisiones de arquitectura) → implementación guiada por esa especificación → validación de estructura con `./gradlew vs` del scaffold Bancolombia. Este proceso se mantuvo documentado y versionado a lo largo del desarrollo, no aplicado de forma ad-hoc.
+Este proyecto se desarrolló usando **Claude Code** y **Codex** bajo un enfoque de Spec-Driven Development (SDD): definición de backlog (historias de usuario + criterios de aceptación) → especificación técnica (`SPEC.md`, contratos de API, modelo de datos, decisiones de arquitectura) → implementación guiada por esa especificación → validación de estructura con `./gradlew vs` del scaffold Bancolombia. Este proceso se mantuvo documentado y versionado a lo largo del desarrollo, no aplicado de forma ad-hoc.
 
 ---
 
